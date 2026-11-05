@@ -172,6 +172,14 @@ async function processStreamData(eventType, rawData) {
       await handleIncomingClipboard(data, devId);
       return;
     }
+
+    // 5. Threaded SMS conversations from Android device
+    if (path.includes('/sms_threads')) {
+      const parts = path.split('/').filter(Boolean);
+      const devId = parts[0];
+      await handleIncomingSmsThreads(data, path, devId);
+      return;
+    }
   } catch (e) {
     console.error('[PushBridge SW] Error parsing stream payload:', e.message);
   }
@@ -265,6 +273,55 @@ async function handleIncomingClipboard(clip, sourceDeviceId) {
   chrome.runtime.sendMessage({
     type: 'CLIPBOARD_UPDATED',
     clipboard: clip
+  }).catch(() => {});
+}
+
+/**
+ * Handles incoming threaded SMS conversations from Android phone.
+ */
+async function handleIncomingSmsThreads(data, path, sourceDeviceId) {
+  if (!data) return;
+
+  const { smsThreads = {} } = await chrome.storage.local.get('smsThreads');
+  const parts = path.split('/').filter(Boolean); // ['android_xyz', 'sms_threads', '12', ...]
+
+  let updatedThreads = { ...smsThreads };
+
+  if (parts.length === 2) {
+    // Whole map of threads updated
+    updatedThreads = { ...smsThreads, ...data };
+  } else if (parts.length >= 3) {
+    const threadId = parts[2];
+    const existingThread = smsThreads[threadId] || {
+      threadId: Number(threadId),
+      messages: {}
+    };
+
+    if (parts.length === 3) {
+      updatedThreads[threadId] = { ...existingThread, ...data };
+    } else if (parts[3] === 'messages' && parts[4]) {
+      const msgId = parts[4];
+      const existingMsgs = existingThread.messages || {};
+      updatedThreads[threadId] = {
+        ...existingThread,
+        messages: { ...existingMsgs, [msgId]: data }
+      };
+    } else if (parts[3]) {
+      updatedThreads[threadId] = {
+        ...existingThread,
+        [parts[3]]: data
+      };
+    }
+  }
+
+  await chrome.storage.local.set({
+    smsThreads: updatedThreads,
+    activeTargetDeviceId: sourceDeviceId
+  });
+
+  chrome.runtime.sendMessage({
+    type: 'SMS_THREADS_UPDATED',
+    threads: updatedThreads
   }).catch(() => {});
 }
 
@@ -411,6 +468,88 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const data = await res.json();
           const deviceIds = data && typeof data === 'object' ? Object.keys(data) : [];
           sendResponse({ success: true, devices: deviceIds });
+          break;
+        }
+
+        case 'FETCH_SMS_THREADS': {
+          const { targetDeviceId } = message;
+          const targetUrl = `${RTDB_BASE_URL}/devices/${targetDeviceId}/sms_threads.json`;
+          const res = await fetch(targetUrl);
+          const data = await res.json();
+          const threads = data && typeof data === 'object' ? data : {};
+          await chrome.storage.local.set({ smsThreads: threads });
+          sendResponse({ success: true, threads });
+          break;
+        }
+
+        case 'SEND_CHAT_MESSAGE': {
+          const { targetDeviceId, threadId, recipient, messageBody, attachment } = message;
+          const targetUrl = `${RTDB_BASE_URL}/devices/${targetDeviceId}/inbound_commands.json`;
+
+          const commandPayload = {
+            type: 'SEND_SMS',
+            threadId: threadId || 0,
+            recipient,
+            message: messageBody,
+            attachment: attachment || null,
+            timestamp: Date.now(),
+            status: 'pending'
+          };
+
+          // Optimistically update local thread storage so outgoing chat bubble appears instantly
+          const { smsThreads = {} } = await chrome.storage.local.get('smsThreads');
+          const threadKey = String(threadId || Math.abs(recipient.split('').reduce((a, b) => (((a << 5) - a) + b.charCodeAt(0)) | 0, 0)));
+          const existingThread = smsThreads[threadKey] || {
+            threadId: Number(threadKey),
+            address: recipient,
+            snippet: messageBody,
+            lastTimestamp: Date.now(),
+            messages: {}
+          };
+
+          const localMsgId = `local_out_${Date.now()}`;
+          const newMsg = {
+            id: localMsgId,
+            threadId: Number(threadKey),
+            address: recipient,
+            body: messageBody,
+            timestamp: Date.now(),
+            isIncoming: false,
+            isRead: true,
+            pending: true
+          };
+
+          existingThread.messages = { ...existingThread.messages, [localMsgId]: newMsg };
+          existingThread.snippet = messageBody;
+          existingThread.lastTimestamp = Date.now();
+
+          const updatedThreads = { ...smsThreads, [threadKey]: existingThread };
+          await chrome.storage.local.set({ smsThreads: updatedThreads });
+
+          const res = await fetch(targetUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(commandPayload)
+          });
+
+          const result = await res.json();
+          sendResponse({ success: res.ok, result, threadKey });
+          break;
+        }
+
+        case 'TRIGGER_SMS_SYNC': {
+          const { targetDeviceId } = message;
+          const targetUrl = `${RTDB_BASE_URL}/devices/${targetDeviceId}/inbound_commands.json`;
+          const res = await fetch(targetUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              type: 'SYNC_SMS_THREADS',
+              timestamp: Date.now(),
+              status: 'pending'
+            })
+          });
+          sendResponse({ success: res.ok });
           break;
         }
 

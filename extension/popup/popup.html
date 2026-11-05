@@ -3,146 +3,230 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PushBridge</title>
+  <title>PushBridge v2 - Notification & SMS Dashboard</title>
   <link rel="stylesheet" href="tailwind.css">
 </head>
-<body class="w-[460px] min-h-[560px] bg-slate-950 text-slate-100 flex flex-col font-sans select-none antialiased">
+<body class="w-[760px] h-[580px] bg-slate-950 text-slate-100 flex flex-col font-sans select-none antialiased overflow-hidden">
 
   <!-- Header -->
-  <header class="bg-slate-900/90 backdrop-blur border-b border-slate-800 px-4 py-3 flex items-center justify-between sticky top-0 z-30">
-    <div class="flex items-center gap-2.5">
+  <header class="bg-slate-900/95 backdrop-blur border-b border-slate-800 px-4 py-2.5 flex items-center justify-between shrink-0 z-30">
+    <div class="flex items-center gap-3">
       <div class="relative flex h-3 w-3">
         <span id="status-ping" class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
         <span id="status-dot" class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
       </div>
-      <div>
+      <div class="flex items-center gap-2">
         <h1 class="text-sm font-bold tracking-tight text-white flex items-center gap-1.5">
           PushBridge
-          <span class="text-[10px] font-medium bg-sky-500/10 text-sky-400 border border-sky-500/20 px-1.5 py-0.5 rounded">RTDB</span>
+          <span class="text-[10px] font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/20 px-1.5 py-0.5 rounded">v2.0</span>
         </h1>
       </div>
+
+      <!-- Google Contacts Badge / Auth Action -->
+      <button id="btn-google-auth" class="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 px-2 py-0.5 rounded-full text-[11px] transition cursor-pointer" title="Sync with Google Contacts (People API)">
+        <span class="w-2 h-2 rounded-full bg-emerald-400" id="google-auth-indicator"></span>
+        <span id="google-auth-text">Google Contacts</span>
+      </button>
     </div>
 
-    <!-- Target Device Selector -->
+    <!-- Header Actions -->
     <div class="flex items-center gap-2">
+      <!-- Device Selector -->
       <select id="target-device-select" class="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-lg px-2.5 py-1 outline-none focus:border-sky-500 cursor-pointer">
         <option value="">Detecting phone...</option>
       </select>
-      <button id="btn-test-toast" title="Trigger Test Notification Toast" class="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition text-xs border border-slate-700">
+
+      <button id="btn-sync-threads" title="Sync SMS Threads from Android Phone" class="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition text-xs border border-slate-700">
+        🔄
+      </button>
+
+      <button id="btn-test-toast" title="Simulate Desktop Notification Toast" class="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition text-xs border border-slate-700">
         🔔
+      </button>
+
+      <button id="btn-expand-tab" title="Open in Full Tab Dashboard" class="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition text-xs border border-slate-700">
+        ↗
       </button>
     </div>
   </header>
 
-  <!-- Navigation Tabs -->
-  <nav class="flex border-b border-slate-800 bg-slate-900/50 px-2 text-xs font-medium">
-    <button id="tab-btn-feed" data-tab="tab-feed" class="tab-button active flex-1 py-2.5 text-center text-sky-400 border-b-2 border-sky-500 font-semibold flex items-center justify-center gap-1.5 transition">
+  <!-- Primary Navigation Tabs -->
+  <nav class="flex border-b border-slate-800 bg-slate-900/50 px-3 text-xs font-medium shrink-0">
+    <button id="tab-btn-feed" data-tab="tab-feed" class="tab-button active py-2.5 px-4 text-center text-sky-400 border-b-2 border-sky-500 font-semibold flex items-center justify-center gap-2 transition">
       <span>Notifications</span>
       <span id="feed-counter" class="bg-sky-500/20 text-sky-300 text-[10px] px-1.5 py-0.2 rounded-full font-bold">0</span>
     </button>
-    <button id="tab-btn-sms" data-tab="tab-sms" class="tab-button flex-1 py-2.5 text-center text-slate-400 hover:text-slate-200 border-b-2 border-transparent font-medium flex items-center justify-center gap-1.5 transition">
-      <span>Compose SMS</span>
+    <button id="tab-btn-sms" data-tab="tab-sms" class="tab-button py-2.5 px-4 text-center text-slate-400 hover:text-slate-200 border-b-2 border-transparent font-medium flex items-center justify-center gap-2 transition">
+      <span>Threaded SMS</span>
+      <span id="threads-counter" class="bg-slate-800 text-slate-400 text-[10px] px-1.5 py-0.2 rounded-full font-bold">0</span>
     </button>
-    <button id="tab-btn-clip" data-tab="tab-clip" class="tab-button flex-1 py-2.5 text-center text-slate-400 hover:text-slate-200 border-b-2 border-transparent font-medium flex items-center justify-center gap-1.5 transition">
+    <button id="tab-btn-clip" data-tab="tab-clip" class="tab-button py-2.5 px-4 text-center text-slate-400 hover:text-slate-200 border-b-2 border-transparent font-medium flex items-center justify-center gap-2 transition">
       <span>Clipboard Sync</span>
     </button>
   </nav>
 
-  <!-- Main Content Container -->
-  <main class="flex-1 overflow-y-auto p-4 space-y-4">
+  <!-- Tab Contents Viewport -->
+  <main class="flex-1 overflow-hidden relative">
 
-    <!-- TAB 1: NOTIFICATIONS FEED -->
-    <section id="tab-feed" class="tab-pane space-y-3">
-      <div class="flex items-center justify-between pb-1">
-        <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Live Mirror Feed</span>
-        <button id="btn-clear-feed" class="text-xs text-slate-400 hover:text-rose-400 transition cursor-pointer">
-          Clear All
-        </button>
+    <!-- ======================================================== -->
+    <!-- TAB 1: NOTIFICATIONS TAB (Bundled vs Chronological)       -->
+    <!-- ======================================================== -->
+    <section id="tab-feed" class="tab-pane h-full flex flex-col p-4 overflow-y-auto space-y-3">
+      <!-- Toolbar with Sorting Mode Toggle -->
+      <div class="flex items-center justify-between pb-1 border-b border-slate-800/80 shrink-0">
+        <!-- Display Mode Toggle -->
+        <div class="flex items-center gap-1 bg-slate-900 p-0.5 rounded-lg border border-slate-800">
+          <button id="btn-view-bundled" class="px-2.5 py-1 rounded-md text-xs font-semibold bg-sky-600 text-white transition flex items-center gap-1.5 shadow-sm">
+            <span>📂</span>
+            <span>Bundled by Source</span>
+          </button>
+          <button id="btn-view-chronological" class="px-2.5 py-1 rounded-md text-xs font-medium text-slate-400 hover:text-slate-200 transition flex items-center gap-1.5">
+            <span>🕒</span>
+            <span>Chronological</span>
+          </button>
+        </div>
+
+        <div class="flex items-center gap-3">
+          <span id="notif-count-label" class="text-xs text-slate-400">0 notifications</span>
+          <button id="btn-clear-feed" class="text-xs text-slate-400 hover:text-rose-400 transition cursor-pointer">
+            Clear All
+          </button>
+        </div>
       </div>
 
-      <!-- Feed Container -->
-      <div id="notifications-container" class="space-y-3">
-        <!-- Rendered dynamically via popup.js -->
+      <!-- Feed Container (Dynamic rendering) -->
+      <div id="notifications-container" class="space-y-3 flex-1 pb-4">
+        <!-- Rendered by popup.js: Bundled view or Chronological view -->
       </div>
 
       <!-- Empty State -->
-      <div id="feed-empty-state" class="hidden flex flex-col items-center justify-center py-12 px-4 text-center rounded-xl border border-dashed border-slate-800 bg-slate-900/30">
+      <div id="feed-empty-state" class="hidden flex flex-col items-center justify-center py-16 px-4 text-center rounded-xl border border-dashed border-slate-800 bg-slate-900/30">
         <div class="w-12 h-12 rounded-full bg-slate-800/80 flex items-center justify-center text-xl mb-3 text-slate-400">
           📱
         </div>
-        <h3 class="text-sm font-semibold text-slate-300 mb-1">No Intercepted Notifications</h3>
-        <p class="text-xs text-slate-500 max-w-xs mb-4">Incoming notifications on your Android device will mirror here with real-time remote reply support.</p>
-        <button id="btn-empty-test" class="px-3 py-1.5 text-xs bg-sky-600 hover:bg-sky-500 text-white rounded-lg font-medium transition cursor-pointer">
-          Simulate Android Notification
+        <h3 class="text-sm font-semibold text-slate-300 mb-1">No Active Notifications</h3>
+        <p class="text-xs text-slate-500 max-w-sm mb-4">Notifications mirrored from your Android phone will appear here in real time with remote inline reply capabilities.</p>
+        <button id="btn-empty-test" class="px-3.5 py-1.5 text-xs bg-sky-600 hover:bg-sky-500 text-white rounded-lg font-medium transition cursor-pointer">
+          Trigger Sample Notification
         </button>
       </div>
     </section>
 
-    <!-- TAB 2: COMPOSE SMS -->
-    <section id="tab-sms" class="tab-pane hidden space-y-3.5">
-      <div>
-        <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Send SMS Via Android Bridge</h2>
-        <p class="text-xs text-slate-500">Dispatches natively through your paired Android phone's carrier SIM.</p>
+    <!-- ======================================================== -->
+    <!-- TAB 2: THREADED SMS CHAT INTERFACE (Split-Pane Layout)   -->
+    <!-- ======================================================== -->
+    <section id="tab-sms" class="tab-pane hidden h-full flex overflow-hidden">
+
+      <!-- LEFT SIDEBAR: Contact & Conversation Threads List -->
+      <aside class="w-[280px] border-r border-slate-800 flex flex-col bg-slate-900/60 shrink-0">
+        <!-- Search & New Message Bar -->
+        <div class="p-2.5 border-b border-slate-800 space-y-2 relative">
+          <div class="flex items-center gap-1.5">
+            <div class="relative flex-1">
+              <input type="text" id="sms-search-input" placeholder="Search Google Contacts or SMS..."
+                class="w-full bg-slate-950 border border-slate-800 rounded-lg pl-7 pr-2.5 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500">
+              <span class="absolute left-2.5 top-2 text-slate-500 text-xs">🔍</span>
+            </div>
+            <button id="btn-new-chat" title="Compose New Message" class="p-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold transition shrink-0 cursor-pointer shadow-sm">
+              +
+            </button>
+          </div>
+
+          <!-- Google Contacts Autocomplete Popover -->
+          <div id="contacts-autocomplete-popover" class="hidden absolute left-2.5 right-2.5 top-[44px] bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-40 max-h-[260px] overflow-y-auto divide-y divide-slate-800/80">
+            <!-- Rendered dynamically -->
+          </div>
+        </div>
+
+        <!-- Conversation Threads List -->
+        <div id="thread-list-container" class="flex-1 overflow-y-auto divide-y divide-slate-800/40">
+          <!-- Rendered dynamically via popup.js -->
+        </div>
+
+        <!-- Thread List Footer -->
+        <div class="p-2 border-t border-slate-800 text-[11px] text-slate-500 flex items-center justify-between bg-slate-900/90">
+          <span id="threads-summary-text">0 conversations</span>
+          <button id="btn-manual-sync-sms" class="text-sky-400 hover:underline cursor-pointer">
+            Fetch from Phone
+          </button>
+        </div>
+      </aside>
+
+      <!-- RIGHT PANE: Active Conversation View -->
+      <div id="chat-conversation-pane" class="flex-1 flex flex-col bg-slate-950 overflow-hidden">
+
+        <!-- Active Conversation Header -->
+        <div id="chat-header" class="px-4 py-2.5 border-b border-slate-800 bg-slate-900/40 flex items-center justify-between shrink-0">
+          <div class="flex items-center gap-2.5">
+            <div id="chat-header-avatar" class="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-xs text-sky-400">
+              --
+            </div>
+            <div>
+              <h2 id="chat-header-name" class="text-xs font-bold text-slate-100">Select a conversation</h2>
+              <p id="chat-header-phone" class="text-[10px] text-slate-500 font-mono"></p>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <span id="chat-carrier-indicator" class="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-medium">
+              Android SIM Active
+            </span>
+          </div>
+        </div>
+
+        <!-- New Message Recipient Bar (Visible only when composing to new contact) -->
+        <div id="new-recipient-bar" class="hidden px-4 py-2 border-b border-slate-800 bg-slate-900/80 flex items-center gap-2">
+          <label for="new-recipient-input" class="text-xs text-slate-400 font-medium shrink-0">To:</label>
+          <input type="tel" id="new-recipient-input" placeholder="Type phone number or contact name..."
+            class="flex-1 bg-transparent border-none text-xs text-white placeholder-slate-600 focus:outline-none">
+        </div>
+
+        <!-- Scrollable Chat Messages Container -->
+        <div id="chat-messages-container" class="flex-1 overflow-y-auto p-4 space-y-3">
+          <!-- Empty / Select State -->
+          <div id="chat-empty-selection" class="h-full flex flex-col items-center justify-center text-center p-6 text-slate-500">
+            <div class="w-12 h-12 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center text-xl mb-2 text-slate-400">
+              💬
+            </div>
+            <p class="text-xs font-semibold text-slate-300">No Conversation Selected</p>
+            <p class="text-[11px] text-slate-500 mt-1 max-w-xs">Select a conversation from the left sidebar or start a new chat using Google Contacts.</p>
+          </div>
+        </div>
+
+        <!-- Attachment Preview Pill (Above composer) -->
+        <div id="chat-attachment-preview" class="hidden px-4 py-1.5 bg-slate-900 border-t border-slate-800 flex items-center justify-between">
+          <div class="flex items-center gap-2 truncate">
+            <span class="text-xs">📎</span>
+            <span id="chat-attachment-name" class="text-xs text-slate-300 truncate max-w-[300px]"></span>
+            <span id="chat-attachment-size" class="text-[10px] text-slate-500"></span>
+          </div>
+          <button type="button" id="btn-remove-chat-attachment" class="text-slate-400 hover:text-rose-400 text-xs font-bold p-1 cursor-pointer">✕</button>
+        </div>
+
+        <!-- Chat Composer Bar -->
+        <form id="chat-composer-form" class="p-3 border-t border-slate-800 bg-slate-900/60 flex items-end gap-2 shrink-0">
+          <input type="file" id="chat-file-input" class="hidden">
+          <button type="button" id="btn-attach-chat-file" title="Attach file or image (Base64)" class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition cursor-pointer shrink-0">
+            📎
+          </button>
+
+          <div class="flex-1 bg-slate-900 border border-slate-700 focus-within:border-sky-500 rounded-xl px-3 py-1.5 transition">
+            <textarea id="chat-composer-input" rows="1" placeholder="Type a message (Press Enter to send)..."
+              class="w-full bg-transparent border-none text-xs text-white placeholder-slate-500 focus:outline-none resize-none max-h-[80px] leading-relaxed"></textarea>
+          </div>
+
+          <button type="submit" id="btn-chat-send" class="p-2 bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white rounded-xl transition cursor-pointer shrink-0 flex items-center justify-center shadow-md shadow-sky-600/20">
+            <span class="text-xs font-bold px-1.5">Send</span>
+          </button>
+        </form>
+
       </div>
-
-      <form id="sms-form" class="space-y-3">
-        <!-- Recipient -->
-        <div class="space-y-1">
-          <label for="sms-recipient" class="text-xs font-medium text-slate-300">Recipient Phone Number</label>
-          <input type="tel" id="sms-recipient" placeholder="+1 (555) 000-0000" required
-            class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500">
-        </div>
-
-        <!-- Message Body -->
-        <div class="space-y-1">
-          <div class="flex items-center justify-between">
-            <label for="sms-body" class="text-xs font-medium text-slate-300">Message Text</label>
-            <span id="sms-char-counter" class="text-[11px] text-slate-500">0 / 160</span>
-          </div>
-          <textarea id="sms-body" rows="3" placeholder="Type your text message..." required
-            class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 resize-none"></textarea>
-        </div>
-
-        <!-- File Attachment (Base64 conversion) -->
-        <div class="space-y-1.5">
-          <label class="text-xs font-medium text-slate-300">Attachment (MMS/Media)</label>
-
-          <div id="dropzone" class="border border-dashed border-slate-700 hover:border-slate-500 rounded-lg p-3 text-center bg-slate-900/40 cursor-pointer transition">
-            <input type="file" id="sms-file-input" class="hidden">
-            <div id="dropzone-prompt" class="space-y-1">
-              <span class="text-base">📎</span>
-              <p class="text-xs text-slate-400 font-medium">Click to select file or drag & drop</p>
-              <p class="text-[10px] text-slate-500">Supports images, audio, or PDFs (encoded to Base64)</p>
-            </div>
-
-            <!-- Attachment Preview Box -->
-            <div id="attachment-preview" class="hidden flex items-center justify-between bg-slate-800/90 rounded-md p-2 text-left">
-              <div class="flex items-center gap-2 overflow-hidden">
-                <span id="preview-icon" class="text-base">📄</span>
-                <div class="truncate">
-                  <p id="preview-name" class="text-xs font-medium text-slate-200 truncate"></p>
-                  <p id="preview-size" class="text-[10px] text-slate-400"></p>
-                </div>
-              </div>
-              <button type="button" id="btn-remove-attachment" class="text-slate-400 hover:text-rose-400 p-1 text-xs font-bold cursor-pointer">
-                ✕
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Submit Button -->
-        <button type="submit" id="btn-send-sms" class="w-full bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white font-semibold text-xs py-2.5 px-4 rounded-lg flex items-center justify-center gap-2 transition cursor-pointer shadow-lg shadow-sky-600/20">
-          <span id="btn-send-text">Send SMS via Phone</span>
-          <span id="btn-send-spinner" class="hidden animate-spin h-3.5 w-3.5 border-2 border-white border-t-transparent rounded-full"></span>
-        </button>
-
-        <div id="sms-status-banner" class="hidden rounded-lg p-2.5 text-xs"></div>
-      </form>
     </section>
 
-    <!-- TAB 3: CLIPBOARD SYNC -->
-    <section id="tab-clip" class="tab-pane hidden space-y-4">
+    <!-- ======================================================== -->
+    <!-- TAB 3: CLIPBOARD SYNC                                     -->
+    <!-- ======================================================== -->
+    <section id="tab-clip" class="tab-pane hidden h-full p-4 overflow-y-auto space-y-4">
       <div>
         <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Universal Clipboard Bridge</h2>
         <p class="text-xs text-slate-500">Seamlessly sync clipboard snippets between your desktop and Android phone via Firebase.</p>
@@ -190,15 +274,10 @@
 
   </main>
 
-  <!-- Footer -->
-  <footer class="bg-slate-900/90 border-t border-slate-800 px-4 py-2 flex items-center justify-between text-[11px] text-slate-500">
-    <div class="flex items-center gap-1.5">
-      <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
-      <span id="footer-connection-text">Connected to pushclonebridge</span>
-    </div>
-    <span class="text-slate-600">v1.0.0</span>
-  </footer>
+  <!-- Global Toast Status Feedback Bar -->
+  <div id="global-toast" class="hidden fixed bottom-3 right-3 bg-slate-900 border border-slate-700 text-xs text-white px-3 py-2 rounded-lg shadow-xl z-50 flex items-center gap-2"></div>
 
-  <script src="popup.js"></script>
+  <!-- Scripts -->
+  <script type="module" src="popup.js"></script>
 </body>
 </html>

@@ -1,15 +1,15 @@
 {
   "manifest_version": 3,
   "name": "PushBridge - Notification & SMS Sync",
-  "version": "1.0.0",
-  "description": "Cross-platform real-time notification, SMS bridge, and clipboard sync with your Android device.",
+  "version": "2.0.0",
+  "description": "Cross-platform real-time notification, threaded SMS bridge, Google Contacts integration, and clipboard sync with your Android device.",
   "icons": {
     "16": "icons/icon-16.png",
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
   },
   "action": {
-    "default_title": "PushBridge",
+    "default_title": "PushBridge Dashboard",
     "default_popup": "popup/popup.html",
     "default_icon": {
       "16": "icons/icon-16.png",
@@ -26,15 +26,25 @@
     "open_in_tab": false
   },
   "permissions": [
+    "identity",
     "notifications",
     "storage",
     "alarms",
     "clipboardRead",
     "clipboardWrite"
   ],
+  "oauth2": {
+    "client_id": "250338142494-0kkhcln4o6s3m8p1vdv7l4215kfa4uip.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/contacts.readonly",
+      "https://www.googleapis.com/auth/userinfo.profile",
+      "https://www.googleapis.com/auth/userinfo.email"
+    ]
+  },
   "host_permissions": [
     "https://*.firebaseio.com/*",
     "https://*.googleapis.com/*",
+    "https://people.googleapis.com/*",
     "http://localhost:*/*",
     "http://127.0.0.1:*/*"
   ]

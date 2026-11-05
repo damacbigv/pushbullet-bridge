@@ -47,7 +47,9 @@ fun MainScreen(
     val hasNotifAccess = remember(permissionTrigger) { PermissionUtils.hasNotificationAccess(context) }
     val hasSmsSend = remember(permissionTrigger) { PermissionUtils.hasSmsSendPermission(context) }
     val hasSmsRead = remember(permissionTrigger) { PermissionUtils.hasSmsReadPermission(context) }
+    val hasContactsRead = remember(permissionTrigger) { PermissionUtils.hasContactsReadPermission(context) }
     val isListenerConnected = PushBridgeNotificationListenerService.isConnected
+    var isSyncingThreads by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -168,11 +170,29 @@ fun MainScreen(
                         Text("SEND_SMS:", style = MaterialTheme.typography.bodySmall)
                         Text(if (hasSmsSend) "✓ Granted" else "✗ Missing", color = if (hasSmsSend) Color(0xFF10B981) else Color(0xFFEF4444))
                     }
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("READ_CONTACTS:", style = MaterialTheme.typography.bodySmall)
+                        Text(if (hasContactsRead) "✓ Granted" else "✗ Missing", color = if (hasContactsRead) Color(0xFF10B981) else Color(0xFFEF4444))
+                    }
                     OutlinedButton(
                         onClick = onRequestSmsPermission,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("Request SMS Permissions")
+                        Text("Request SMS & Contacts Permissions")
+                    }
+
+                    Button(
+                        onClick = {
+                            isSyncingThreads = true
+                            PushBridgeFirebaseManager.syncAllSmsThreads(context) { count ->
+                                isSyncingThreads = false
+                                testStatusText = "Synced $count conversation threads to Firebase!"
+                            }
+                        },
+                        enabled = hasSmsRead && !isSyncingThreads,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(if (isSyncingThreads) "Syncing Conversations..." else "Sync Full SMS Threads to Firebase")
                     }
                 }
             }

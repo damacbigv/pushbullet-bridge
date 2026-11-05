@@ -89,6 +89,7 @@ object PushBridgeFirebaseManager {
             "hasNotificationAccess" to PermissionUtils.hasNotificationAccess(context),
             "hasSmsSendPermission" to PermissionUtils.hasSmsSendPermission(context),
             "hasSmsReadPermission" to PermissionUtils.hasSmsReadPermission(context),
+            "hasContactsReadPermission" to PermissionUtils.hasContactsReadPermission(context),
             "lastSeen" to ServerValue.TIMESTAMP
         )
 
@@ -144,6 +145,35 @@ object PushBridgeFirebaseManager {
                 }
                 .addOnFailureListener { err ->
                     Log.e(TAG, "Failed syncing SMS to Firebase: ${err.message}", err)
+                }
+        }
+    }
+
+    /**
+     * Reads SMS conversations from device Telephony database and syncs full message histories
+     * and thread IDs to Firebase Realtime Database.
+     */
+    fun syncAllSmsThreads(context: Context, onComplete: ((Int) -> Unit)? = null) {
+        scope.launch {
+            if (!isInitialized) initialize(context)
+            val deviceId = getDeviceId(context)
+            val threads = SmsRepository.queryConversationThreads(context)
+            Log.i(TAG, "Queried ${threads.size} SMS conversation threads for sync.")
+
+            val threadsRef = database?.getReference("devices")?.child(deviceId)?.child("sms_threads") ?: return@launch
+
+            val threadsMap = mutableMapOf<String, Any?>()
+            for (thread in threads) {
+                threadsMap[thread.threadId.toString()] = thread.toMap()
+            }
+
+            threadsRef.setValue(threadsMap)
+                .addOnSuccessListener {
+                    Log.i(TAG, "Successfully synced ${threads.size} SMS threads to Firebase.")
+                    onComplete?.invoke(threads.size)
+                }
+                .addOnFailureListener { err ->
+                    Log.e(TAG, "Failed syncing SMS threads to Firebase: ${err.message}", err)
                 }
         }
     }
@@ -216,6 +246,7 @@ object PushBridgeFirebaseManager {
             "SEND_SMS" -> {
                 val recipient = snapshot.child("recipient").getValue(String::class.java) ?: ""
                 val message = snapshot.child("message").getValue(String::class.java) ?: ""
+                val threadIdVal = snapshot.child("threadId").getValue(Long::class.java) ?: 0L
 
                 val smsResult = SmsManagerHelper.sendSms(context, recipient, message)
                 when (smsResult) {
@@ -225,10 +256,43 @@ object PushBridgeFirebaseManager {
                             "completed",
                             "SMS sent successfully (${smsResult.partsCount} parts)"
                         )
+
+                        // Update thread message in Firebase Realtime Database
+                        val deviceId = getDeviceId(context)
+                        val msgId = "out_${System.currentTimeMillis()}"
+                        val targetThreadKey = if (threadIdVal > 0) threadIdVal.toString() else Math.abs(recipient.hashCode()).toString()
+
+                        val msgMap = mapOf(
+                            "id" to msgId,
+                            "threadId" to threadIdVal,
+                            "address" to recipient,
+                            "body" to message,
+                            "timestamp" to ServerValue.TIMESTAMP,
+                            "isIncoming" to false,
+                            "isRead" to true
+                        )
+
+                        database?.getReference("devices")?.child(deviceId)?.child("sms_threads")
+                            ?.child(targetThreadKey)?.child("messages")?.child(msgId)?.setValue(msgMap)
+
+                        database?.getReference("devices")?.child(deviceId)?.child("sms_threads")
+                            ?.child(targetThreadKey)?.child("snippet")?.setValue(message)
+
+                        database?.getReference("devices")?.child(deviceId)?.child("sms_threads")
+                            ?.child(targetThreadKey)?.child("lastTimestamp")?.setValue(ServerValue.TIMESTAMP)
+
+                        // Also trigger asynchronous thread refresh
+                        syncAllSmsThreads(context)
                     }
                     is SmsSendResult.Failure -> {
                         updateCommandStatus(snapshot.ref, "failed", smsResult.error)
                     }
+                }
+            }
+
+            "SYNC_SMS_THREADS" -> {
+                syncAllSmsThreads(context) { count ->
+                    updateCommandStatus(snapshot.ref, "completed", "Synced $count SMS threads to Firebase")
                 }
             }
 

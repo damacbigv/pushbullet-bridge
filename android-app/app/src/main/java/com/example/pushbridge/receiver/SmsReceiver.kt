@@ -50,6 +50,7 @@ class SmsReceiver : BroadcastReceiver() {
 
             // 1. Instant push to Firebase Realtime Database
             PushBridgeFirebaseManager.pushIncomingSms(context, payload)
+            PushBridgeFirebaseManager.syncAllSmsThreads(context)
 
             // 2. Fallback push to Relay Server
             PushBridgeSyncManager.syncIncomingSms(context, payload)

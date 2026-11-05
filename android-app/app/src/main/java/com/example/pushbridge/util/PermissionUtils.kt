@@ -56,6 +56,16 @@ object PermissionUtils {
     }
 
     /**
+     * Checks runtime permission to read contacts (for SMS sender name resolution).
+     */
+    fun hasContactsReadPermission(context: Context): Boolean {
+        return ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.READ_CONTACTS
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    /**
      * Returns intent to directly open Android's Notification Access Settings screen.
      */
     fun getNotificationAccessSettingsIntent(): Intent {
