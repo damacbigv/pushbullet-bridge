@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "250338142494",
+    "project_id": "pushclonebridge",
+    "storage_bucket": "pushclonebridge.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:250338142494:android:pushbridgecompanion",
+        "android_client_info": {
+          "package_name": "com.example.pushbridge"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCmoxdDpdYz_Gxsx04zXSemus6fJmA4-gU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

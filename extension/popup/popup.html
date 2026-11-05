@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PushBridge</title>
+  <link rel="stylesheet" href="tailwind.css">
+</head>
+<body class="w-[460px] min-h-[560px] bg-slate-950 text-slate-100 flex flex-col font-sans select-none antialiased">
+
+  <!-- Header -->
+  <header class="bg-slate-900/90 backdrop-blur border-b border-slate-800 px-4 py-3 flex items-center justify-between sticky top-0 z-30">
+    <div class="flex items-center gap-2.5">
+      <div class="relative flex h-3 w-3">
+        <span id="status-ping" class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+        <span id="status-dot" class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+      </div>
+      <div>
+        <h1 class="text-sm font-bold tracking-tight text-white flex items-center gap-1.5">
+          PushBridge
+          <span class="text-[10px] font-medium bg-sky-500/10 text-sky-400 border border-sky-500/20 px-1.5 py-0.5 rounded">RTDB</span>
+        </h1>
+      </div>
+    </div>
+
+    <!-- Target Device Selector -->
+    <div class="flex items-center gap-2">
+      <select id="target-device-select" class="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-lg px-2.5 py-1 outline-none focus:border-sky-500 cursor-pointer">
+        <option value="">Detecting phone...</option>
+      </select>
+      <button id="btn-test-toast" title="Trigger Test Notification Toast" class="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition text-xs border border-slate-700">
+        🔔
+      </button>
+    </div>
+  </header>
+
+  <!-- Navigation Tabs -->
+  <nav class="flex border-b border-slate-800 bg-slate-900/50 px-2 text-xs font-medium">
+    <button id="tab-btn-feed" data-tab="tab-feed" class="tab-button active flex-1 py-2.5 text-center text-sky-400 border-b-2 border-sky-500 font-semibold flex items-center justify-center gap-1.5 transition">
+      <span>Notifications</span>
+      <span id="feed-counter" class="bg-sky-500/20 text-sky-300 text-[10px] px-1.5 py-0.2 rounded-full font-bold">0</span>
+    </button>
+    <button id="tab-btn-sms" data-tab="tab-sms" class="tab-button flex-1 py-2.5 text-center text-slate-400 hover:text-slate-200 border-b-2 border-transparent font-medium flex items-center justify-center gap-1.5 transition">
+      <span>Compose SMS</span>
+    </button>
+    <button id="tab-btn-clip" data-tab="tab-clip" class="tab-button flex-1 py-2.5 text-center text-slate-400 hover:text-slate-200 border-b-2 border-transparent font-medium flex items-center justify-center gap-1.5 transition">
+      <span>Clipboard Sync</span>
+    </button>
+  </nav>
+
+  <!-- Main Content Container -->
+  <main class="flex-1 overflow-y-auto p-4 space-y-4">
+
+    <!-- TAB 1: NOTIFICATIONS FEED -->
+    <section id="tab-feed" class="tab-pane space-y-3">
+      <div class="flex items-center justify-between pb-1">
+        <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Live Mirror Feed</span>
+        <button id="btn-clear-feed" class="text-xs text-slate-400 hover:text-rose-400 transition cursor-pointer">
+          Clear All
+        </button>
+      </div>
+
+      <!-- Feed Container -->
+      <div id="notifications-container" class="space-y-3">
+        <!-- Rendered dynamically via popup.js -->
+      </div>
+
+      <!-- Empty State -->
+      <div id="feed-empty-state" class="hidden flex flex-col items-center justify-center py-12 px-4 text-center rounded-xl border border-dashed border-slate-800 bg-slate-900/30">
+        <div class="w-12 h-12 rounded-full bg-slate-800/80 flex items-center justify-center text-xl mb-3 text-slate-400">
+          📱
+        </div>
+        <h3 class="text-sm font-semibold text-slate-300 mb-1">No Intercepted Notifications</h3>
+        <p class="text-xs text-slate-500 max-w-xs mb-4">Incoming notifications on your Android device will mirror here with real-time remote reply support.</p>
+        <button id="btn-empty-test" class="px-3 py-1.5 text-xs bg-sky-600 hover:bg-sky-500 text-white rounded-lg font-medium transition cursor-pointer">
+          Simulate Android Notification
+        </button>
+      </div>
+    </section>
+
+    <!-- TAB 2: COMPOSE SMS -->
+    <section id="tab-sms" class="tab-pane hidden space-y-3.5">
+      <div>
+        <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Send SMS Via Android Bridge</h2>
+        <p class="text-xs text-slate-500">Dispatches natively through your paired Android phone's carrier SIM.</p>
+      </div>
+
+      <form id="sms-form" class="space-y-3">
+        <!-- Recipient -->
+        <div class="space-y-1">
+          <label for="sms-recipient" class="text-xs font-medium text-slate-300">Recipient Phone Number</label>
+          <input type="tel" id="sms-recipient" placeholder="+1 (555) 000-0000" required
+            class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500">
+        </div>
+
+        <!-- Message Body -->
+        <div class="space-y-1">
+          <div class="flex items-center justify-between">
+            <label for="sms-body" class="text-xs font-medium text-slate-300">Message Text</label>
+            <span id="sms-char-counter" class="text-[11px] text-slate-500">0 / 160</span>
+          </div>
+          <textarea id="sms-body" rows="3" placeholder="Type your text message..." required
+            class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 resize-none"></textarea>
+        </div>
+
+        <!-- File Attachment (Base64 conversion) -->
+        <div class="space-y-1.5">
+          <label class="text-xs font-medium text-slate-300">Attachment (MMS/Media)</label>
+
+          <div id="dropzone" class="border border-dashed border-slate-700 hover:border-slate-500 rounded-lg p-3 text-center bg-slate-900/40 cursor-pointer transition">
+            <input type="file" id="sms-file-input" class="hidden">
+            <div id="dropzone-prompt" class="space-y-1">
+              <span class="text-base">📎</span>
+              <p class="text-xs text-slate-400 font-medium">Click to select file or drag & drop</p>
+              <p class="text-[10px] text-slate-500">Supports images, audio, or PDFs (encoded to Base64)</p>
+            </div>
+
+            <!-- Attachment Preview Box -->
+            <div id="attachment-preview" class="hidden flex items-center justify-between bg-slate-800/90 rounded-md p-2 text-left">
+              <div class="flex items-center gap-2 overflow-hidden">
+                <span id="preview-icon" class="text-base">📄</span>
+                <div class="truncate">
+                  <p id="preview-name" class="text-xs font-medium text-slate-200 truncate"></p>
+                  <p id="preview-size" class="text-[10px] text-slate-400"></p>
+                </div>
+              </div>
+              <button type="button" id="btn-remove-attachment" class="text-slate-400 hover:text-rose-400 p-1 text-xs font-bold cursor-pointer">
+                ✕
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Submit Button -->
+        <button type="submit" id="btn-send-sms" class="w-full bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white font-semibold text-xs py-2.5 px-4 rounded-lg flex items-center justify-center gap-2 transition cursor-pointer shadow-lg shadow-sky-600/20">
+          <span id="btn-send-text">Send SMS via Phone</span>
+          <span id="btn-send-spinner" class="hidden animate-spin h-3.5 w-3.5 border-2 border-white border-t-transparent rounded-full"></span>
+        </button>
+
+        <div id="sms-status-banner" class="hidden rounded-lg p-2.5 text-xs"></div>
+      </form>
+    </section>
+
+    <!-- TAB 3: CLIPBOARD SYNC -->
+    <section id="tab-clip" class="tab-pane hidden space-y-4">
+      <div>
+        <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Universal Clipboard Bridge</h2>
+        <p class="text-xs text-slate-500">Seamlessly sync clipboard snippets between your desktop and Android phone via Firebase.</p>
+      </div>
+
+      <!-- Phone Clipboard Card -->
+      <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-3.5 space-y-2.5">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-medium text-slate-300 flex items-center gap-1.5">
+            <span>📱</span> Phone Clipboard
+          </span>
+          <span id="phone-clip-time" class="text-[10px] text-slate-500">No sync yet</span>
+        </div>
+
+        <div id="phone-clip-text" class="text-xs text-slate-300 bg-slate-950 p-2.5 rounded-lg border border-slate-800 min-h-[48px] max-h-[96px] overflow-y-auto break-words font-mono">
+          Waiting for text copied on your Android device...
+        </div>
+
+        <button id="btn-copy-to-desktop" class="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs py-2 rounded-lg font-medium border border-slate-700 flex items-center justify-center gap-1.5 transition cursor-pointer">
+          <span>📋</span> Copy to Local Desktop Clipboard
+        </button>
+      </div>
+
+      <!-- Desktop to Phone Sync Card -->
+      <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-3.5 space-y-2.5">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-medium text-slate-300 flex items-center gap-1.5">
+            <span>💻</span> Push Desktop Clipboard to Phone
+          </span>
+          <button id="btn-read-desktop-clip" class="text-xs text-sky-400 hover:underline cursor-pointer">
+            Read Current Machine Clipboard
+          </button>
+        </div>
+
+        <textarea id="desktop-clip-input" rows="3" placeholder="Type or paste text to push to your phone..."
+          class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 resize-none font-mono"></textarea>
+
+        <button id="btn-push-clip" class="w-full bg-sky-600 hover:bg-sky-500 text-white text-xs py-2 rounded-lg font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer shadow-lg shadow-sky-600/20">
+          <span>🚀</span> Push to Phone Clipboard
+        </button>
+      </div>
+
+      <div id="clip-status-banner" class="hidden rounded-lg p-2.5 text-xs"></div>
+    </section>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="bg-slate-900/90 border-t border-slate-800 px-4 py-2 flex items-center justify-between text-[11px] text-slate-500">
+    <div class="flex items-center gap-1.5">
+      <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+      <span id="footer-connection-text">Connected to pushclonebridge</span>
+    </div>
+    <span class="text-slate-600">v1.0.0</span>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>

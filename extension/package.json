@@ -1,0 +1,19 @@
+{
+  "name": "pushbridge-extension",
+  "version": "1.0.0",
+  "description": "Chrome Extension (Manifest V3) for PushBridge cross-platform notification and SMS synchronization",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:css": "tailwindcss -i popup/input.css -o popup/tailwind.css --minify",
+    "build": "npm run build:css && node build.js"
+  },
+  "dependencies": {
+    "firebase": "^11.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.3.4",
+    "esbuild": "^0.25.0",
+    "tailwindcss": "^4.3.4"
+  }
+}

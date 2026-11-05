@@ -1,0 +1,29 @@
+{
+  "name": "pushbridge-workspace",
+  "version": "1.0.0",
+  "description": "Custom, self-hosted cross-platform notification and SMS bridge application replacing Pushbullet",
+  "private": true,
+  "workspaces": [
+    "relay-server",
+    "extension"
+  ],
+  "scripts": {
+    "start": "npm run start --prefix relay-server",
+    "start:relay": "npm run start --prefix relay-server",
+    "dev:relay": "npm run dev --prefix relay-server",
+    "build:extension": "npm run build --prefix extension",
+    "build:android": "cd android-app && ./gradlew assembleDebug",
+    "install:all": "npm install --prefix relay-server && npm install --prefix extension"
+  },
+  "keywords": [
+    "pushbullet",
+    "notification-mirroring",
+    "sms-bridge",
+    "firebase",
+    "chrome-extension",
+    "android",
+    "cross-platform"
+  ],
+  "author": "",
+  "license": "MIT"
+}

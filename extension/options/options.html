@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PushBridge Settings</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <div class="settings-container">
+    <header class="header">
+      <h1>PushBridge Configuration</h1>
+      <p class="subtitle">Self-hosted Android & Chrome Notification/SMS Bridge</p>
+    </header>
+
+    <form id="settings-form">
+      <section class="section">
+        <h2>Firebase Real-Time Credentials</h2>
+        <div class="field-group">
+          <label for="firebase-project-id">Project ID</label>
+          <input type="text" id="firebase-project-id" readonly class="readonly">
+          <small>Active Firebase backend: <code id="active-firebase-id">pushclonebridge</code></small>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Fallback Relay Server</h2>
+        <div class="field-group">
+          <label for="relay-url">Express Relay Server URL</label>
+          <input type="url" id="relay-url" placeholder="http://localhost:3000" required>
+          <small>Lightweight Node/Express service managing device pairing & sync fallback.</small>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Synchronization Preferences</h2>
+        <div class="checkbox-group">
+          <label>
+            <input type="checkbox" id="notif-toggle">
+            Enable Chrome Desktop Notifications
+          </label>
+        </div>
+        <div class="checkbox-group">
+          <label>
+            <input type="checkbox" id="clipboard-toggle">
+            Universal Clipboard Sync (Auto-send copied text)
+          </label>
+        </div>
+      </section>
+
+      <div class="actions">
+        <button type="submit" id="btn-save" class="primary-btn">Save Settings</button>
+        <span id="save-status" class="save-status hidden">Settings saved!</span>
+      </div>
+    </form>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>
