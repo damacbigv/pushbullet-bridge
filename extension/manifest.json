@@ -37,6 +37,7 @@
     "client_id": "250338142494-0kkhcln4o6s3m8p1vdv7l4215kfa4uip.apps.googleusercontent.com",
     "scopes": [
       "https://www.googleapis.com/auth/contacts.readonly",
+      "https://www.googleapis.com/auth/contacts.other.readonly",
       "https://www.googleapis.com/auth/userinfo.profile",
       "https://www.googleapis.com/auth/userinfo.email"
     ]

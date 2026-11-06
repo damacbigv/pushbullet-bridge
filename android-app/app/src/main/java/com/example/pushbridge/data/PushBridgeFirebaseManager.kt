@@ -237,12 +237,15 @@ object PushBridgeFirebaseManager {
      * Synchronizes local device phonebook contacts to Firebase so the Chrome extension
      * can query them alongside Google Contacts.
      */
-    fun syncDeviceContacts(context: Context) {
+    fun syncDeviceContacts(context: Context, onComplete: ((Int) -> Unit)? = null) {
         scope.launch {
             if (!isInitialized) initialize(context)
             val deviceId = getDeviceId(context)
             val contacts = SmsRepository.queryDeviceContacts(context)
-            if (contacts.isEmpty()) return@launch
+            if (contacts.isEmpty()) {
+                onComplete?.invoke(0)
+                return@launch
+            }
 
             val contactsRef = database?.getReference("devices")?.child(deviceId)?.child("contacts") ?: return@launch
             val contactsMap = mutableMapOf<String, Any?>()
@@ -253,6 +256,7 @@ object PushBridgeFirebaseManager {
             contactsRef.setValue(contactsMap)
                 .addOnSuccessListener {
                     Log.i(TAG, "Successfully synced ${contacts.size} device contacts to Firebase.")
+                    onComplete?.invoke(contacts.size)
                 }
                 .addOnFailureListener { err ->
                     Log.w(TAG, "Failed syncing device contacts: ${err.message}")

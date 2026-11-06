@@ -1,51 +1,53 @@
 /**
- * Google Contacts Integration using Google People API v1 and chrome.identity (OAuth 2.0)
- * Combined with local device telephony contact stores for robust contact resolution,
+ * Google Contacts & Identity Management Module (Manifest V3)
+ * Integrates Google People API v1 (Connections & Other Contacts) via chrome.identity OAuth 2.0,
+ * combined with local device telephony contact stores for robust contact resolution,
  * identity mapping, and keyboard-accessible autocomplete.
  */
 
-export const GOOGLE_PEOPLE_API_ENDPOINT = 'https://people.googleapis.com/v1/people/me/connections?personFields=names,phoneNumbers,photos&pageSize=300';
+export const PEOPLE_CONNECTIONS_ENDPOINT =
+  'https://people.googleapis.com/v1/people/me/connections?personFields=names,phoneNumbers,photos&pageSize=300';
+
+export const OTHER_CONTACTS_ENDPOINT =
+  'https://people.googleapis.com/v1/otherContacts?readMask=names,phoneNumbers,photos&pageSize=300';
 
 /**
  * Initiates Google OAuth2 authentication flow and retrieves user contacts from Google Address Book.
+ * Automatically queries both primary connections (My Contacts) and Other Contacts.
  */
 export async function syncGoogleContacts(interactive = true) {
   try {
-    const token = await getAuthToken(interactive);
+    let token = await getAuthToken(interactive);
     if (!token) {
       throw new Error('Google authentication was cancelled or token unavailable.');
     }
 
-    const response = await fetch(GOOGLE_PEOPLE_API_ENDPOINT, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Accept': 'application/json'
+    // Attempt primary connections fetch with token refresh retry
+    let primaryData = null;
+    let otherData = null;
+
+    try {
+      primaryData = await fetchJsonWithAuth(PEOPLE_CONNECTIONS_ENDPOINT, token);
+    } catch (err) {
+      if (err.status === 401) {
+        // Token expired, invalidate and retry once with a fresh token
+        await removeCachedAuthToken(token);
+        token = await getAuthToken(true);
+        if (!token) throw new Error('Failed to refresh Google authorization token.');
+        primaryData = await fetchJsonWithAuth(PEOPLE_CONNECTIONS_ENDPOINT, token);
+      } else {
+        throw err;
       }
-    });
-
-    if (response.status === 401) {
-      // Token might be expired, remove cached token and retry once
-      await removeCachedAuthToken(token);
-      const freshToken = await getAuthToken(true);
-      if (!freshToken) throw new Error('Failed to refresh Google authorization token.');
-
-      const retryRes = await fetch(GOOGLE_PEOPLE_API_ENDPOINT, {
-        headers: {
-          'Authorization': `Bearer ${freshToken}`,
-          'Accept': 'application/json'
-        }
-      });
-      if (!retryRes.ok) throw new Error(`Google People API error: ${retryRes.statusText}`);
-      const data = await retryRes.json();
-      return parseAndCacheContacts(data);
     }
 
-    if (!response.ok) {
-      throw new Error(`Google People API error: ${response.status} ${response.statusText}`);
+    // Attempt otherContacts fetch (contacts messaged previously)
+    try {
+      otherData = await fetchJsonWithAuth(OTHER_CONTACTS_ENDPOINT, token);
+    } catch (otherErr) {
+      console.info('[Google Contacts] otherContacts skipped or scope not granted:', otherErr.message);
     }
 
-    const data = await response.json();
-    return parseAndCacheContacts(data);
+    return parseAndCacheAllContacts(primaryData, otherData);
   } catch (err) {
     console.warn('[Google Contacts] Sync issue:', err.message);
 
@@ -60,9 +62,29 @@ export async function syncGoogleContacts(interactive = true) {
 }
 
 /**
+ * Authenticated JSON fetcher helper
+ */
+async function fetchJsonWithAuth(url, token) {
+  const response = await fetch(url, {
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Accept': 'application/json'
+    }
+  });
+
+  if (!response.ok) {
+    const error = new Error(`Google People API error: ${response.status} ${response.statusText}`);
+    error.status = response.status;
+    throw error;
+  }
+
+  return response.json();
+}
+
+/**
  * Retrieves OAuth token via chrome.identity
  */
-function getAuthToken(interactive = true) {
+export function getAuthToken(interactive = true) {
   return new Promise((resolve, reject) => {
     if (!chrome.identity || !chrome.identity.getAuthToken) {
       reject(new Error('chrome.identity API is not available in this context.'));
@@ -79,7 +101,10 @@ function getAuthToken(interactive = true) {
   });
 }
 
-function removeCachedAuthToken(token) {
+/**
+ * Removes cached OAuth token from chrome.identity
+ */
+export function removeCachedAuthToken(token) {
   return new Promise((resolve) => {
     if (!chrome.identity || !chrome.identity.removeCachedAuthToken) {
       resolve();
@@ -90,33 +115,62 @@ function removeCachedAuthToken(token) {
 }
 
 /**
- * Normalizes People API connections into clean contact records
+ * Parses and merges connections and otherContacts into a unified, deduplicated list
  */
-async function parseAndCacheContacts(apiData) {
-  const connections = apiData.connections || [];
+async function parseAndCacheAllContacts(primaryApiData, otherApiData) {
   const contacts = [];
 
-  for (const person of connections) {
-    const name = person.names?.[0]?.displayName || person.names?.[0]?.givenName;
-    const phoneNumbers = person.phoneNumbers || [];
-    const photoUrl = person.photos?.[0]?.url;
+  // 1. Parse primary connections
+  if (primaryApiData?.connections) {
+    for (const person of primaryApiData.connections) {
+      const name = person.names?.[0]?.displayName || person.names?.[0]?.givenName;
+      const phoneNumbers = person.phoneNumbers || [];
+      const photoUrl = person.photos?.[0]?.url;
 
-    if (!name && phoneNumbers.length === 0) continue;
+      if (!name && phoneNumbers.length === 0) continue;
 
-    for (const phone of phoneNumbers) {
-      const rawValue = phone.value || '';
-      const cleanDigits = normalizePhoneNumber(rawValue);
+      for (const phone of phoneNumbers) {
+        const rawValue = phone.value || '';
+        const cleanDigits = normalizePhoneNumber(rawValue);
 
-      contacts.push({
-        id: person.resourceName || `c_${cleanDigits}`,
-        name: name || rawValue,
-        phone: rawValue,
-        cleanDigits,
-        photoUrl: photoUrl && !photoUrl.includes('default-user') ? photoUrl : null,
-        initials: getInitials(name || rawValue),
-        type: phone.type || 'mobile',
-        source: 'google'
-      });
+        contacts.push({
+          id: person.resourceName || `c_${cleanDigits}`,
+          name: name || rawValue,
+          phone: rawValue,
+          cleanDigits,
+          photoUrl: photoUrl && !photoUrl.includes('default-user') ? photoUrl : null,
+          initials: getInitials(name || rawValue),
+          type: phone.type || 'mobile',
+          source: 'google'
+        });
+      }
+    }
+  }
+
+  // 2. Parse otherContacts
+  if (otherApiData?.otherContacts) {
+    for (const person of otherApiData.otherContacts) {
+      const name = person.names?.[0]?.displayName || person.names?.[0]?.givenName;
+      const phoneNumbers = person.phoneNumbers || [];
+      const photoUrl = person.photos?.[0]?.url;
+
+      if (!name && phoneNumbers.length === 0) continue;
+
+      for (const phone of phoneNumbers) {
+        const rawValue = phone.value || '';
+        const cleanDigits = normalizePhoneNumber(rawValue);
+
+        contacts.push({
+          id: person.resourceName || `oc_${cleanDigits}`,
+          name: name || rawValue,
+          phone: rawValue,
+          cleanDigits,
+          photoUrl: photoUrl && !photoUrl.includes('default-user') ? photoUrl : null,
+          initials: getInitials(name || rawValue),
+          type: phone.type || 'other',
+          source: 'google'
+        });
+      }
     }
   }
 
@@ -158,7 +212,7 @@ export function normalizePhoneNumber(raw) {
 
 /**
  * Formats a raw phone number into standard human-readable format.
- * Gracefully falls back if already formatted or not 10/11 digits.
+ * Gracefully falls back if already formatted or non-standard digits.
  */
 export function formatPhoneNumber(raw) {
   if (!raw) return '';
@@ -220,7 +274,7 @@ export function resolveContactIdentity(phoneOrAddress, googleContacts = [], devi
     }
   }
 
-  // 3. Fallback: formatted phone number
+  // 3. Fallback: formatted readable phone number
   const formatted = formatPhoneNumber(phoneOrAddress);
   return {
     name: formatted,
@@ -241,7 +295,6 @@ export async function searchCombinedContacts(query) {
     deviceContactsCache = {}
   } = await chrome.storage.local.get(['googleContactsCache', 'deviceContactsCache']);
 
-  // Extract device contacts array from map or list
   const deviceList = Array.isArray(deviceContactsCache)
     ? deviceContactsCache
     : Object.values(deviceContactsCache);
@@ -250,7 +303,6 @@ export async function searchCombinedContacts(query) {
     ? googleContactsCache
     : getFallbackSampleContacts();
 
-  // Combine & deduplicate by normalized phone
   const mergedMap = new Map();
 
   for (const c of googleList) {
@@ -301,7 +353,6 @@ export function getInitials(name) {
   if (!name) return '??';
   const clean = String(name).trim();
   if (clean.startsWith('+')) {
-    // Phone number initials
     const digits = clean.replace(/\D/g, '');
     return digits.slice(-2);
   }

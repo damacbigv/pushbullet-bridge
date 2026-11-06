@@ -192,7 +192,20 @@ fun MainScreen(
                         enabled = hasSmsRead && !isSyncingThreads,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text(if (isSyncingThreads) "Syncing Conversations..." else "Sync Full SMS Threads to Firebase")
+                        Text(if (isSyncingThreads) "Syncing Conversations..." else "Sync Full SMS & Group Threads")
+                    }
+
+                    Button(
+                        onClick = {
+                            PushBridgeFirebaseManager.syncDeviceContacts(context) { count ->
+                                testStatusText = "Synced $count device contacts to Firebase!"
+                            }
+                        },
+                        enabled = hasContactsRead,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6366F1))
+                    ) {
+                        Text("Sync Device Contacts to Firebase")
                     }
                 }
             }
