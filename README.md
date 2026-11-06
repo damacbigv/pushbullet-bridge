@@ -3,6 +3,11 @@
 > **Self-Hosted Cross-Platform Notification Mirroring, Threaded SMS & Group Chat Bridge**  
 > A private, modular alternative to Pushbullet connecting Google Chrome, Android devices, and a fallback cloud sync relay using Firebase as the real-time synchronization backend.
 
+[![Download Android APK](https://img.shields.io/badge/Download_APK-v2.5.0_(16_MB)-10B981?style=for-the-badge&logo=android&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/raw/main/releases/PushBridge-v2.5.0.apk)
+[![Chrome Extension](https://img.shields.io/badge/Chrome_Extension-Manifest_V3_(v2.5.0)-0EA5E9?style=for-the-badge&logo=googlechrome&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/tree/main/extension)
+
+📥 **Direct APK Download**: [releases/PushBridge-v2.5.0.apk](https://github.com/damacbigv/pushbullet-bridge/raw/main/releases/PushBridge-v2.5.0.apk)
+
 ---
 
 ## What's New in Version 2.5
@@ -95,25 +100,19 @@ pushbullet-bridge/
 
 ### 2. Android Companion App
 
-#### Prerequisites:
-- Android device running Android 8.0 (API 26) or higher.
-- Developer Options & USB Debugging enabled on your phone.
-- USB cable or Wireless ADB pairing.
+#### Option A: Direct Installation (Recommended)
+You can directly download the pre-compiled APK from the repository without needing to build from source:
+- **Direct Download**: [PushBridge-v2.5.0.apk](https://github.com/damacbigv/pushbullet-bridge/raw/main/releases/PushBridge-v2.5.0.apk)
+- **Install via ADB**:
+  ```bash
+  adb install -r releases/PushBridge-v2.5.0.apk
+  ```
+*(Or open the download link directly in your Android phone's browser and tap to install).*
 
-#### Build & Install:
-From the root workspace directory, run:
+#### Option B: Build from Source
 ```bash
 cd android-app
 ./gradlew assembleDebug
-```
-
-The APK will be generated at:
-```
-android-app/app/build/outputs/apk/debug/app-debug.apk
-```
-
-Install to your connected device using `adb`:
-```bash
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
