@@ -3,10 +3,12 @@
 > **Self-Hosted Cross-Platform Notification Mirroring, Threaded SMS & Group Chat Bridge**  
 > A private, modular alternative to Pushbullet connecting Google Chrome, Android devices, and a fallback cloud sync relay using Firebase as the real-time synchronization backend.
 
-[![Download Android APK](https://img.shields.io/badge/Download_APK-v2.5.0_(16_MB)-10B981?style=for-the-badge&logo=android&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/raw/main/releases/PushBridge-v2.5.0.apk)
+[![Download Android APK](https://img.shields.io/badge/Download_APK-v2.5.0_(16_MB)-10B981?style=for-the-badge&logo=android&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/download/v2.5.0/PushBridge-v2.5.0.apk)
+[![GitHub Release](https://img.shields.io/badge/GitHub_Release-v2.5.0-6366F1?style=for-the-badge&logo=github&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v2.5.0)
 [![Chrome Extension](https://img.shields.io/badge/Chrome_Extension-Manifest_V3_(v2.5.0)-0EA5E9?style=for-the-badge&logo=googlechrome&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/tree/main/extension)
 
-📥 **Direct APK Download**: [releases/PushBridge-v2.5.0.apk](https://github.com/damacbigv/pushbullet-bridge/raw/main/releases/PushBridge-v2.5.0.apk)
+📥 **Release Page**: [GitHub Release v2.5.0](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v2.5.0)  
+📦 **Direct APK Download**: [PushBridge-v2.5.0.apk](https://github.com/damacbigv/pushbullet-bridge/releases/download/v2.5.0/PushBridge-v2.5.0.apk)
 
 ---
 
@@ -101,13 +103,14 @@ pushbullet-bridge/
 ### 2. Android Companion App
 
 #### Option A: Direct Installation (Recommended)
-You can directly download the pre-compiled APK from the repository without needing to build from source:
-- **Direct Download**: [PushBridge-v2.5.0.apk](https://github.com/damacbigv/pushbullet-bridge/raw/main/releases/PushBridge-v2.5.0.apk)
+You can directly download the pre-compiled APK from the official GitHub Release:
+- **Direct APK Download**: [PushBridge-v2.5.0.apk](https://github.com/damacbigv/pushbullet-bridge/releases/download/v2.5.0/PushBridge-v2.5.0.apk)
+- **Release Page**: [PushBridge v2.5.0 Release](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v2.5.0)
 - **Install via ADB**:
   ```bash
   adb install -r releases/PushBridge-v2.5.0.apk
   ```
-*(Or open the download link directly in your Android phone's browser and tap to install).*
+*(Tip: On Android, open the release download link in **Chrome** rather than the GitHub app, as mobile in-app webviews block direct APK package downloads).*
 
 #### Option B: Build from Source
 ```bash
