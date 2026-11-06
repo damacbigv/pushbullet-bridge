@@ -1,5 +1,7 @@
 /**
  * Google Contacts Integration using Google People API v1 and chrome.identity (OAuth 2.0)
+ * Combined with local device telephony contact stores for robust contact resolution,
+ * identity mapping, and keyboard-accessible autocomplete.
  */
 
 export const GOOGLE_PEOPLE_API_ENDPOINT = 'https://people.googleapis.com/v1/people/me/connections?personFields=names,phoneNumbers,photos&pageSize=300';
@@ -103,7 +105,7 @@ async function parseAndCacheContacts(apiData) {
 
     for (const phone of phoneNumbers) {
       const rawValue = phone.value || '';
-      const cleanDigits = rawValue.replace(/\D/g, '');
+      const cleanDigits = normalizePhoneNumber(rawValue);
 
       contacts.push({
         id: person.resourceName || `c_${cleanDigits}`,
@@ -112,7 +114,8 @@ async function parseAndCacheContacts(apiData) {
         cleanDigits,
         photoUrl: photoUrl && !photoUrl.includes('default-user') ? photoUrl : null,
         initials: getInitials(name || rawValue),
-        type: phone.type || 'mobile'
+        type: phone.type || 'mobile',
+        source: 'google'
       });
     }
   }
@@ -141,29 +144,168 @@ async function parseAndCacheContacts(apiData) {
 }
 
 /**
- * Searches contacts by name or phone query
+ * Normalizes a phone number into bare digits for reliable comparison.
+ * Extracts last 10 digits for standard North American matching or full digits.
  */
-export async function searchContacts(query) {
-  const { googleContactsCache = [] } = await chrome.storage.local.get('googleContactsCache');
-  const contacts = googleContactsCache.length > 0 ? googleContactsCache : getFallbackSampleContacts();
+export function normalizePhoneNumber(raw) {
+  if (!raw) return '';
+  const digits = String(raw).replace(/\D/g, '');
+  if (digits.length === 11 && digits.startsWith('1')) {
+    return digits.substring(1);
+  }
+  return digits;
+}
+
+/**
+ * Formats a raw phone number into standard human-readable format.
+ * Gracefully falls back if already formatted or not 10/11 digits.
+ */
+export function formatPhoneNumber(raw) {
+  if (!raw) return '';
+  const digits = String(raw).replace(/\D/g, '');
+
+  if (digits.length === 10) {
+    return `+1 (${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+  }
+  if (digits.length === 11 && digits.startsWith('1')) {
+    const core = digits.substring(1);
+    return `+1 (${core.slice(0, 3)}) ${core.slice(3, 6)}-${core.slice(6)}`;
+  }
+  if (digits.length > 6) {
+    return `+${digits.slice(0, digits.length - 7)} ${digits.slice(-7, -4)}-${digits.slice(-4)}`;
+  }
+  return raw;
+}
+
+/**
+ * Resolves a phone number or address to a contact record from Google Contacts or device contacts.
+ * If found, returns { name, avatarUrl, initials, phone, isResolved: true }.
+ * If no match exists, gracefully falls back to formatted phone number.
+ */
+export function resolveContactIdentity(phoneOrAddress, googleContacts = [], deviceContacts = []) {
+  if (!phoneOrAddress) {
+    return { name: 'Unknown', avatarUrl: null, initials: '??', phone: '', isResolved: false };
+  }
+
+  const normalized = normalizePhoneNumber(phoneOrAddress);
+
+  // 1. Check Google Contacts first
+  for (const c of googleContacts) {
+    if (!c) continue;
+    if (c.cleanDigits && normalized && (c.cleanDigits === normalized || c.cleanDigits.endsWith(normalized) || normalized.endsWith(c.cleanDigits))) {
+      return {
+        name: c.name,
+        avatarUrl: c.photoUrl || null,
+        initials: c.initials || getInitials(c.name),
+        phone: c.phone || phoneOrAddress,
+        isResolved: true,
+        source: 'google'
+      };
+    }
+  }
+
+  // 2. Check Device Contacts next
+  for (const c of deviceContacts) {
+    if (!c) continue;
+    const cClean = c.cleanDigits || normalizePhoneNumber(c.phone);
+    if (cClean && normalized && (cClean === normalized || cClean.endsWith(normalized) || normalized.endsWith(cClean))) {
+      return {
+        name: c.name,
+        avatarUrl: null,
+        initials: getInitials(c.name),
+        phone: c.phone || phoneOrAddress,
+        isResolved: true,
+        source: 'device'
+      };
+    }
+  }
+
+  // 3. Fallback: formatted phone number
+  const formatted = formatPhoneNumber(phoneOrAddress);
+  return {
+    name: formatted,
+    avatarUrl: null,
+    initials: getInitials(formatted),
+    phone: phoneOrAddress,
+    isResolved: false,
+    source: 'raw'
+  };
+}
+
+/**
+ * Searches combined contacts (Google Contacts + Device Contacts) with responsive filtering.
+ */
+export async function searchCombinedContacts(query) {
+  const {
+    googleContactsCache = [],
+    deviceContactsCache = {}
+  } = await chrome.storage.local.get(['googleContactsCache', 'deviceContactsCache']);
+
+  // Extract device contacts array from map or list
+  const deviceList = Array.isArray(deviceContactsCache)
+    ? deviceContactsCache
+    : Object.values(deviceContactsCache);
+
+  const googleList = googleContactsCache.length > 0
+    ? googleContactsCache
+    : getFallbackSampleContacts();
+
+  // Combine & deduplicate by normalized phone
+  const mergedMap = new Map();
+
+  for (const c of googleList) {
+    const key = normalizePhoneNumber(c.cleanDigits || c.phone);
+    if (key) mergedMap.set(key, { ...c, source: 'google' });
+  }
+
+  for (const d of deviceList) {
+    const key = normalizePhoneNumber(d.cleanDigits || d.phone);
+    if (key && !mergedMap.has(key)) {
+      mergedMap.set(key, {
+        id: d.id || `dev_${key}`,
+        name: d.name || d.phone,
+        phone: d.phone,
+        cleanDigits: key,
+        photoUrl: null,
+        initials: getInitials(d.name || d.phone),
+        type: 'mobile',
+        source: 'device'
+      });
+    }
+  }
+
+  const allContacts = Array.from(mergedMap.values());
 
   if (!query || !query.trim()) {
-    return contacts.slice(0, 10);
+    return allContacts.slice(0, 10);
   }
 
   const q = query.trim().toLowerCase();
   const digits = q.replace(/\D/g, '');
 
-  return contacts.filter(c => {
+  return allContacts.filter(c => {
     const nameMatch = c.name.toLowerCase().includes(q);
-    const phoneMatch = digits.length > 0 && c.cleanDigits.includes(digits);
+    const phoneMatch = digits.length > 0 && (c.cleanDigits.includes(digits) || c.phone.includes(digits));
     return nameMatch || phoneMatch;
-  }).slice(0, 8);
+  }).slice(0, 10);
 }
 
-function getInitials(name) {
+/**
+ * Backward compatibility alias for searchContacts
+ */
+export async function searchContacts(query) {
+  return searchCombinedContacts(query);
+}
+
+export function getInitials(name) {
   if (!name) return '??';
-  const parts = name.trim().split(/\s+/);
+  const clean = String(name).trim();
+  if (clean.startsWith('+')) {
+    // Phone number initials
+    const digits = clean.replace(/\D/g, '');
+    return digits.slice(-2);
+  }
+  const parts = clean.split(/\s+/);
   if (parts.length === 1) return parts[0].substring(0, 2).toUpperCase();
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
@@ -177,37 +319,41 @@ function getFallbackSampleContacts() {
       id: 'demo_1',
       name: 'Alice Cooper',
       phone: '+1 (555) 234-5678',
-      cleanDigits: '15552345678',
+      cleanDigits: '5552345678',
       photoUrl: null,
       initials: 'AC',
-      type: 'mobile'
+      type: 'mobile',
+      source: 'google'
     },
     {
       id: 'demo_2',
       name: 'Bob Martinez',
       phone: '+1 (555) 876-5432',
-      cleanDigits: '15558765432',
+      cleanDigits: '5558765432',
       photoUrl: null,
       initials: 'BM',
-      type: 'mobile'
+      type: 'mobile',
+      source: 'google'
     },
     {
       id: 'demo_3',
       name: 'Sarah Connor',
       phone: '+1 (555) 901-2345',
-      cleanDigits: '15559012345',
+      cleanDigits: '5559012345',
       photoUrl: null,
       initials: 'SC',
-      type: 'work'
+      type: 'work',
+      source: 'google'
     },
     {
       id: 'demo_4',
       name: 'David Miller',
       phone: '+1 (555) 432-1098',
-      cleanDigits: '15554321098',
+      cleanDigits: '5554321098',
       photoUrl: null,
       initials: 'DM',
-      type: 'home'
+      type: 'home',
+      source: 'google'
     }
   ];
 }

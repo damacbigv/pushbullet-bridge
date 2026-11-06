@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "PushBridge - Notification & SMS Sync",
-  "version": "2.0.0",
-  "description": "Cross-platform real-time notification, threaded SMS bridge, Google Contacts integration, and clipboard sync with your Android device.",
+  "version": "2.5.0",
+  "description": "Cross-platform real-time notification, threaded SMS & group chat bridge, Google & device contacts resolution, and presence sync with your Android device.",
   "icons": {
     "16": "icons/icon-16.png",
     "48": "icons/icon-48.png",

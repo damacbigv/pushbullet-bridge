@@ -139,6 +139,12 @@ async function processStreamData(eventType, rawData) {
     if (path === '/') {
       for (const [devId, devData] of Object.entries(data)) {
         if (devData && typeof devData === 'object') {
+          if (devData.presence) {
+            await handleDevicePresenceUpdate(devData.presence, devId);
+          }
+          if (devData.contacts) {
+            await handleIncomingDeviceContacts(devData.contacts, devId);
+          }
           if (devData.outbound_notifications) {
             for (const notif of Object.values(devData.outbound_notifications)) {
               await handleIncomingNotification(notif, devId, false); // don't alert old backlog
@@ -149,7 +155,23 @@ async function processStreamData(eventType, rawData) {
       return;
     }
 
-    // 2. Outbound notifications from an Android device
+    // 2. Device Presence status update
+    if (path.includes('/presence')) {
+      const parts = path.split('/').filter(Boolean);
+      const devId = parts[0];
+      await handleDevicePresenceUpdate(data, devId);
+      return;
+    }
+
+    // 3. Local phonebook contacts synced from Android device
+    if (path.includes('/contacts')) {
+      const parts = path.split('/').filter(Boolean);
+      const devId = parts[0];
+      await handleIncomingDeviceContacts(data, devId);
+      return;
+    }
+
+    // 4. Outbound notifications from an Android device
     if (path.includes('/outbound_notifications')) {
       const parts = path.split('/').filter(Boolean);
       const devId = parts[0];
@@ -157,7 +179,7 @@ async function processStreamData(eventType, rawData) {
       return;
     }
 
-    // 3. Outbound SMS from an Android device
+    // 5. Outbound SMS from an Android device
     if (path.includes('/outbound_sms')) {
       const parts = path.split('/').filter(Boolean);
       const devId = parts[0];
@@ -165,7 +187,7 @@ async function processStreamData(eventType, rawData) {
       return;
     }
 
-    // 4. Clipboard sync node
+    // 6. Clipboard sync node
     if (path.includes('/clipboard')) {
       const parts = path.split('/').filter(Boolean);
       const devId = parts[0];
@@ -173,7 +195,7 @@ async function processStreamData(eventType, rawData) {
       return;
     }
 
-    // 5. Threaded SMS conversations from Android device
+    // 7. Threaded SMS conversations from Android device
     if (path.includes('/sms_threads')) {
       const parts = path.split('/').filter(Boolean);
       const devId = parts[0];
@@ -323,6 +345,121 @@ async function handleIncomingSmsThreads(data, path, sourceDeviceId) {
     type: 'SMS_THREADS_UPDATED',
     threads: updatedThreads
   }).catch(() => {});
+}
+
+/**
+ * Handles device presence state updates from Firebase RTDB.
+ * Automatically triggers background sync when phone is detected online.
+ */
+async function handleDevicePresenceUpdate(presence, devId) {
+  if (!presence) return;
+
+  const isOnline = typeof presence === 'object' ? presence.online === true : presence === true;
+  const heartbeat = typeof presence === 'object' ? (presence.lastHeartbeat || Date.now()) : Date.now();
+  const deviceName = typeof presence === 'object' ? (presence.deviceName || devId) : devId;
+
+  const { devicePresenceMap = {}, activeTargetDeviceId } = await chrome.storage.local.get([
+    'devicePresenceMap',
+    'activeTargetDeviceId'
+  ]);
+
+  const prevPresence = devicePresenceMap[devId];
+  const wasOnline = prevPresence?.online === true;
+
+  const updatedPresence = {
+    online: isOnline,
+    lastHeartbeat: heartbeat,
+    deviceName: deviceName,
+    updatedAt: Date.now()
+  };
+
+  const updatedMap = {
+    ...devicePresenceMap,
+    [devId]: updatedPresence
+  };
+
+  const toSet = {
+    devicePresenceMap: updatedMap
+  };
+
+  if (isOnline && (!activeTargetDeviceId || !activeTargetDeviceId.startsWith('android') || activeTargetDeviceId === devId)) {
+    toSet.activeTargetDeviceId = devId;
+  }
+
+  await chrome.storage.local.set(toSet);
+
+  console.log(`[PushBridge SW] Presence update: ${devId} is ${isOnline ? 'ONLINE' : 'OFFLINE'}`);
+
+  // Broadcast presence change to popup UI
+  chrome.runtime.sendMessage({
+    type: 'DEVICE_PRESENCE_CHANGED',
+    deviceId: devId,
+    presence: updatedPresence
+  }).catch(() => {});
+
+  // AUTOMATIC BACKGROUND SYNC:
+  // When device transitions to online or is confirmed online, pull active SMS threads
+  // and local contacts automatically without user having to manually poll
+  if (isOnline && !wasOnline) {
+    console.log(`[PushBridge SW] Phone ${devId} came ONLINE. Triggering automatic background sync...`);
+    await autoSyncDeviceData(devId);
+  }
+}
+
+/**
+ * Automatically syncs threads and contacts from an online device.
+ */
+async function autoSyncDeviceData(devId) {
+  try {
+    // 1. Fetch SMS threads
+    const threadsUrl = `${RTDB_BASE_URL}/devices/${devId}/sms_threads.json`;
+    const threadsRes = await fetch(threadsUrl);
+    if (threadsRes.ok) {
+      const threadsData = await threadsRes.json();
+      if (threadsData && typeof threadsData === 'object') {
+        await chrome.storage.local.set({ smsThreads: threadsData });
+        chrome.runtime.sendMessage({
+          type: 'SMS_THREADS_UPDATED',
+          threads: threadsData
+        }).catch(() => {});
+        console.log(`[PushBridge SW] Auto-synced ${Object.keys(threadsData).length} SMS threads from ${devId}.`);
+      }
+    }
+
+    // 2. Fetch device contacts
+    const contactsUrl = `${RTDB_BASE_URL}/devices/${devId}/contacts.json`;
+    const contactsRes = await fetch(contactsUrl);
+    if (contactsRes.ok) {
+      const contactsData = await contactsRes.json();
+      if (contactsData && typeof contactsData === 'object') {
+        await handleIncomingDeviceContacts(contactsData, devId);
+      }
+    }
+  } catch (err) {
+    console.warn(`[PushBridge SW] Error auto-syncing data for ${devId}:`, err.message);
+  }
+}
+
+/**
+ * Handles incoming local device contacts synced from Android phone.
+ */
+async function handleIncomingDeviceContacts(contacts, devId) {
+  if (!contacts) return;
+
+  const contactsMap = typeof contacts === 'object' ? contacts : {};
+  const { deviceContactsCache = {} } = await chrome.storage.local.get('deviceContactsCache');
+  const mergedContacts = { ...deviceContactsCache, ...contactsMap };
+
+  await chrome.storage.local.set({
+    deviceContactsCache: mergedContacts
+  });
+
+  chrome.runtime.sendMessage({
+    type: 'DEVICE_CONTACTS_UPDATED',
+    contacts: mergedContacts
+  }).catch(() => {});
+
+  console.log(`[PushBridge SW] Synced ${Object.keys(mergedContacts).length} device contacts from ${devId}.`);
 }
 
 /**
@@ -483,13 +620,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         case 'SEND_CHAT_MESSAGE': {
-          const { targetDeviceId, threadId, recipient, messageBody, attachment } = message;
+          const { targetDeviceId, threadId, recipient, messageBody, attachment, isGroup, recipients } = message;
           const targetUrl = `${RTDB_BASE_URL}/devices/${targetDeviceId}/inbound_commands.json`;
 
           const commandPayload = {
             type: 'SEND_SMS',
             threadId: threadId || 0,
             recipient,
+            isGroup: !!isGroup,
+            recipients: recipients || [],
             message: messageBody,
             attachment: attachment || null,
             timestamp: Date.now(),
@@ -502,6 +641,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const existingThread = smsThreads[threadKey] || {
             threadId: Number(threadKey),
             address: recipient,
+            isGroup: !!isGroup,
             snippet: messageBody,
             lastTimestamp: Date.now(),
             messages: {}
@@ -534,6 +674,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
           const result = await res.json();
           sendResponse({ success: res.ok, result, threadKey });
+          break;
+        }
+
+        case 'GET_DEVICE_PRESENCE': {
+          const { targetDeviceId } = message;
+          const { devicePresenceMap = {} } = await chrome.storage.local.get('devicePresenceMap');
+          const presence = targetDeviceId ? devicePresenceMap[targetDeviceId] : null;
+          sendResponse({ success: true, presence, devicePresenceMap });
+          break;
+        }
+
+        case 'FETCH_DEVICE_CONTACTS': {
+          const { targetDeviceId } = message;
+          const targetUrl = `${RTDB_BASE_URL}/devices/${targetDeviceId}/contacts.json`;
+          const res = await fetch(targetUrl);
+          const data = await res.json();
+          const contacts = data && typeof data === 'object' ? data : {};
+          await handleIncomingDeviceContacts(contacts, targetDeviceId);
+          sendResponse({ success: true, contacts });
           break;
         }
 

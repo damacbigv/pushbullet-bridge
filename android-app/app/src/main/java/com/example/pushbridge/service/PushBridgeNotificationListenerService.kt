@@ -2,6 +2,10 @@ package com.example.pushbridge.service
 
 import android.app.Notification
 import android.content.pm.PackageManager
+import android.database.ContentObserver
+import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
@@ -11,6 +15,8 @@ import com.example.pushbridge.model.NotificationPayload
 import com.example.pushbridge.util.NotificationReplyRegistry
 
 class PushBridgeNotificationListenerService : NotificationListenerService() {
+
+    private var telephonyObserver: ContentObserver? = null
 
     companion object {
         private const val TAG = "PushBridgeNotifListener"
@@ -59,6 +65,11 @@ class PushBridgeNotificationListenerService : NotificationListenerService() {
         if (currentInstance == this) {
             currentInstance = null
         }
+        telephonyObserver?.let {
+            try {
+                contentResolver.unregisterContentObserver(it)
+            } catch (_: Exception) {}
+        }
     }
 
     override fun onListenerConnected() {
@@ -67,6 +78,36 @@ class PushBridgeNotificationListenerService : NotificationListenerService() {
         isConnected = true
         Log.i(TAG, "PushBridge Notification Listener connected and active.")
         PushBridgeFirebaseManager.registerDeviceState(applicationContext)
+        registerTelephonyObserver()
+    }
+
+    private fun registerTelephonyObserver() {
+        if (telephonyObserver != null) return
+        val handler = Handler(Looper.getMainLooper())
+        telephonyObserver = object : ContentObserver(handler) {
+            private var lastTrigger = 0L
+
+            override fun onChange(selfChange: Boolean, uri: Uri?) {
+                super.onChange(selfChange, uri)
+                val now = System.currentTimeMillis()
+                if (now - lastTrigger > 1500L) {
+                    lastTrigger = now
+                    Log.d(TAG, "Telephony SMS/MMS change detected via ContentObserver ($uri). Auto-syncing threads...")
+                    PushBridgeFirebaseManager.syncAllSmsThreads(applicationContext)
+                }
+            }
+        }
+
+        try {
+            contentResolver.registerContentObserver(
+                Uri.parse("content://mms-sms/"),
+                true,
+                telephonyObserver as ContentObserver
+            )
+            Log.i(TAG, "Registered Telephony SMS/MMS ContentObserver for real-time thread synchronization.")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed registering Telephony ContentObserver: ${e.message}")
+        }
     }
 
     override fun onListenerDisconnected() {

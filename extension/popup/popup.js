@@ -1,9 +1,17 @@
 /**
- * PushBridge v2 Popup & Desktop Dashboard Controller
- * Implements Threaded SMS Chat, Google Contacts Integration (People API),
- * and Flexible Notification Bundling & Sorting Views.
+ * PushBridge v2.5 Popup & Desktop Dashboard Controller
+ * Implements Threaded SMS & Group Chat, Contact Resolution & Identity Mapping,
+ * Keyboard-Accessible Combined Contact Autocomplete,
+ * and Automatic Thread Synchronization with Real-Time Device Presence Monitoring.
  */
-import { syncGoogleContacts, searchContacts } from '../contacts/google-contacts.js';
+import {
+  syncGoogleContacts,
+  searchCombinedContacts,
+  resolveContactIdentity,
+  formatPhoneNumber,
+  normalizePhoneNumber,
+  getInitials
+} from '../contacts/google-contacts.js';
 
 // Application State
 let currentViewMode = 'bundled'; // 'bundled' | 'chronological'
@@ -12,7 +20,9 @@ let activeThreadId = null;
 let newChatRecipient = '';
 let selectedChatAttachment = null;
 let collapsedBundles = new Set();
-let autocompleteDebounceTimer = null;
+let phoneIsOnline = true;
+let searchAutocomplete = null;
+let composeAutocomplete = null;
 
 document.addEventListener('DOMContentLoaded', async () => {
   setupTabs();
@@ -25,6 +35,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupGlobalEvents();
 
   await checkStreamStatus();
+  await checkDevicePresence();
   await restoreSavedState();
   await loadNotifications();
   await loadSmsThreads();
@@ -76,7 +87,7 @@ function setupWindowExpansion() {
 }
 
 // =============================================================
-// 2. Stream & Device Selector
+// 2. Stream & Device Presence Status Monitoring
 // =============================================================
 async function checkStreamStatus() {
   const statusDot = document.getElementById('status-dot');
@@ -94,6 +105,46 @@ async function checkStreamStatus() {
   } catch {
     statusDot.className = 'relative inline-flex rounded-full h-3 w-3 bg-rose-500';
     statusPing.className = 'hidden';
+  }
+}
+
+async function checkDevicePresence() {
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: 'GET_DEVICE_PRESENCE',
+      targetDeviceId: currentTargetDeviceId
+    });
+
+    if (res && res.presence) {
+      updatePresenceUI(res.presence);
+    } else {
+      // Default optimistic presence
+      updatePresenceUI({ online: true, deviceName: 'Android Companion' });
+    }
+  } catch {
+    updatePresenceUI({ online: false });
+  }
+}
+
+function updatePresenceUI(presence) {
+  const badge = document.getElementById('phone-presence-badge');
+  const dot = document.getElementById('phone-presence-dot');
+  const text = document.getElementById('phone-presence-text');
+  const offlineBanner = document.getElementById('phone-offline-banner');
+
+  const isOnline = presence && presence.online === true;
+  phoneIsOnline = isOnline;
+
+  if (isOnline) {
+    badge.className = 'flex items-center gap-1.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-2.5 py-0.5 rounded-full text-[11px] font-medium transition cursor-default';
+    dot.className = 'w-2 h-2 rounded-full bg-emerald-400 animate-pulse';
+    text.textContent = 'Phone Online';
+    offlineBanner?.classList.add('hidden');
+  } else {
+    badge.className = 'flex items-center gap-1.5 bg-rose-500/10 border border-rose-500/20 text-rose-400 px-2.5 py-0.5 rounded-full text-[11px] font-medium transition cursor-default';
+    dot.className = 'w-2 h-2 rounded-full bg-rose-500';
+    text.textContent = 'Phone Offline';
+    offlineBanner?.classList.remove('hidden');
   }
 }
 
@@ -132,6 +183,7 @@ async function setupDeviceSelector() {
   select.addEventListener('change', async (e) => {
     currentTargetDeviceId = e.target.value;
     await chrome.storage.local.set({ activeTargetDeviceId: currentTargetDeviceId });
+    await checkDevicePresence();
     await loadSmsThreads();
   });
 }
@@ -144,7 +196,7 @@ function setupGoogleContacts() {
   const authText = document.getElementById('google-auth-text');
   const indicator = document.getElementById('google-auth-indicator');
 
-  chrome.storage.local.get(['googleContactsCache', 'googleContactsLastSync']).then(({ googleContactsCache = [] }) => {
+  chrome.storage.local.get(['googleContactsCache']).then(({ googleContactsCache = [] }) => {
     if (googleContactsCache.length > 0) {
       authText.textContent = `Contacts (${googleContactsCache.length})`;
       indicator.className = 'w-2 h-2 rounded-full bg-emerald-400';
@@ -163,8 +215,9 @@ function setupGoogleContacts() {
     } else {
       authText.textContent = `Contacts (${result.contacts?.length || 0})`;
       indicator.className = 'w-2 h-2 rounded-full bg-sky-400';
-      showToast(`Google Contacts connected (Local Cache: ${result.contacts?.length || 0})`);
+      showToast(`Google Contacts ready (Cache: ${result.contacts?.length || 0})`);
     }
+    await loadSmsThreads();
   });
 }
 
@@ -241,11 +294,7 @@ async function loadNotifications() {
   }
 }
 
-/**
- * Mode A: Group notifications hierarchically by app source package name
- */
 function renderBundledNotifications(container, notifications) {
-  // Group by app name / package name
   const groups = new Map();
 
   notifications.forEach(item => {
@@ -267,7 +316,6 @@ function renderBundledNotifications(container, notifications) {
 
     const badgeColor = getAppBadgeStyle(appName, group.packageName);
 
-    // Collapsible Header
     const header = document.createElement('div');
     header.className = 'p-3 flex items-center justify-between bg-slate-900/90 hover:bg-slate-800/80 cursor-pointer border-b border-slate-800/60 transition select-none';
     header.innerHTML = `
@@ -287,7 +335,6 @@ function renderBundledNotifications(container, notifications) {
       </div>
     `;
 
-    // Toggle collapse
     header.addEventListener('click', (e) => {
       if (e.target.closest('.btn-dismiss-bundle')) return;
       if (collapsedBundles.has(appName)) {
@@ -298,7 +345,6 @@ function renderBundledNotifications(container, notifications) {
       loadNotifications();
     });
 
-    // Dismiss All from this App bundle
     header.querySelector('.btn-dismiss-bundle')?.addEventListener('click', async (e) => {
       e.stopPropagation();
       await dismissGroup(group.items.map(i => i.id));
@@ -306,7 +352,6 @@ function renderBundledNotifications(container, notifications) {
 
     bundleCard.appendChild(header);
 
-    // Items list
     if (!isCollapsed) {
       const itemsContainer = document.createElement('div');
       itemsContainer.className = 'divide-y divide-slate-800/50 p-2 space-y-2';
@@ -323,11 +368,7 @@ function renderBundledNotifications(container, notifications) {
   });
 }
 
-/**
- * Mode B: Flat timeline sorted strictly by date/time received descending
- */
 function renderChronologicalNotifications(container, notifications) {
-  // Sort strictly chronological descending
   const sorted = [...notifications].sort((a, b) => b.timestamp - a.timestamp);
 
   sorted.forEach(item => {
@@ -381,12 +422,10 @@ function createNotificationItemElement(item, showAppBadge = true) {
     </div>
   `;
 
-  // Dismiss action
   card.querySelector('.btn-dismiss-item')?.addEventListener('click', async () => {
     await dismissNotification(item.id);
   });
 
-  // Reply submission
   const replyForm = card.querySelector('.inline-reply-form');
   if (replyForm) {
     replyForm.addEventListener('submit', async (e) => {
@@ -457,11 +496,157 @@ function getAppBadgeStyle(appName, pkg) {
 }
 
 // =============================================================
-// 5. Threaded SMS Chat Interface & Autocomplete
+// 5. Robust Contact Autocomplete Component (Keyboard Accessible)
+// =============================================================
+class ContactAutocomplete {
+  constructor(inputEl, popoverEl, onSelect) {
+    this.input = inputEl;
+    this.popover = popoverEl;
+    this.onSelect = onSelect;
+    this.matches = [];
+    this.activeIndex = -1;
+    this.debounceTimer = null;
+
+    this.bindEvents();
+  }
+
+  bindEvents() {
+    this.input.addEventListener('input', () => {
+      clearTimeout(this.debounceTimer);
+      this.debounceTimer = setTimeout(() => this.handleQuery(), 100);
+    });
+
+    this.input.addEventListener('keydown', (e) => this.handleKeyDown(e));
+
+    document.addEventListener('click', (e) => {
+      if (!this.popover.contains(e.target) && e.target !== this.input) {
+        this.hide();
+      }
+    });
+  }
+
+  async handleQuery() {
+    const q = this.input.value.trim();
+    if (!q) {
+      this.hide();
+      return;
+    }
+    this.matches = await searchCombinedContacts(q);
+    this.activeIndex = -1;
+    this.render();
+  }
+
+  handleKeyDown(e) {
+    if (this.popover.classList.contains('hidden') || this.matches.length === 0) {
+      if (e.key === 'ArrowDown' && this.input.value.trim()) {
+        this.handleQuery();
+      }
+      return;
+    }
+
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault();
+        this.activeIndex = (this.activeIndex + 1) % this.matches.length;
+        this.updateActiveHighlight();
+        break;
+
+      case 'ArrowUp':
+        e.preventDefault();
+        this.activeIndex = (this.activeIndex - 1 + this.matches.length) % this.matches.length;
+        this.updateActiveHighlight();
+        break;
+
+      case 'Enter':
+        if (this.activeIndex >= 0 && this.activeIndex < this.matches.length) {
+          e.preventDefault();
+          this.choose(this.matches[this.activeIndex]);
+        }
+        break;
+
+      case 'Escape':
+        e.preventDefault();
+        this.hide();
+        break;
+    }
+  }
+
+  render() {
+    this.popover.innerHTML = '';
+    if (this.matches.length === 0) {
+      this.popover.innerHTML = '<div class="p-3 text-xs text-slate-500 text-center">No matching contacts found.</div>';
+      this.popover.classList.remove('hidden');
+      return;
+    }
+
+    this.matches.forEach((contact, idx) => {
+      const item = document.createElement('div');
+      item.className = 'autocomplete-item p-2 flex items-center gap-2.5 hover:bg-slate-800 cursor-pointer transition select-none';
+      item.setAttribute('data-index', idx);
+
+      const sourceBadge = contact.source === 'google'
+        ? '<span class="text-[9px] bg-sky-500/10 text-sky-400 border border-sky-500/20 px-1 rounded">Google</span>'
+        : '<span class="text-[9px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1 rounded">Phone</span>';
+
+      item.innerHTML = `
+        <div class="w-7 h-7 rounded-full bg-slate-700 flex items-center justify-center font-bold text-xs text-sky-300 shrink-0 overflow-hidden">
+          ${contact.photoUrl ? `<img src="${contact.photoUrl}" class="w-full h-full object-cover">` : escapeHtml(contact.initials)}
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-1.5">
+            <p class="text-xs font-semibold text-slate-100 truncate">${escapeHtml(contact.name)}</p>
+            ${sourceBadge}
+          </div>
+          <p class="text-[11px] text-slate-400 font-mono truncate">${escapeHtml(formatPhoneNumber(contact.phone))} (${contact.type || 'mobile'})</p>
+        </div>
+      `;
+
+      item.addEventListener('mouseenter', () => {
+        this.activeIndex = idx;
+        this.updateActiveHighlight();
+      });
+
+      item.addEventListener('click', () => {
+        this.choose(contact);
+      });
+
+      this.popover.appendChild(item);
+    });
+
+    this.popover.classList.remove('hidden');
+  }
+
+  updateActiveHighlight() {
+    const items = this.popover.querySelectorAll('.autocomplete-item');
+    items.forEach((item, idx) => {
+      if (idx === this.activeIndex) {
+        item.classList.add('bg-slate-800', 'ring-1', 'ring-sky-500/60');
+        item.scrollIntoView({ block: 'nearest' });
+      } else {
+        item.classList.remove('bg-slate-800', 'ring-1', 'ring-sky-500/60');
+      }
+    });
+  }
+
+  choose(contact) {
+    this.hide();
+    if (this.onSelect) {
+      this.onSelect(contact);
+    }
+  }
+
+  hide() {
+    this.popover.classList.add('hidden');
+    this.activeIndex = -1;
+  }
+}
+
+// =============================================================
+// 6. Threaded SMS & Group Chat Interface
 // =============================================================
 function setupThreadedSms() {
   const searchInput = document.getElementById('sms-search-input');
-  const popover = document.getElementById('contacts-autocomplete-popover');
+  const searchPopover = document.getElementById('contacts-autocomplete-popover');
   const btnNewChat = document.getElementById('btn-new-chat');
   const btnManualSync = document.getElementById('btn-manual-sync-sms');
   const btnSyncThreads = document.getElementById('btn-sync-threads');
@@ -472,27 +657,36 @@ function setupThreadedSms() {
   const attachmentPreview = document.getElementById('chat-attachment-preview');
   const removeAttachmentBtn = document.getElementById('btn-remove-chat-attachment');
   const newRecipientInput = document.getElementById('new-recipient-input');
+  const composePopover = document.getElementById('compose-autocomplete-popover');
 
-  // Autocomplete search typing
-  searchInput?.addEventListener('input', () => {
-    clearTimeout(autocompleteDebounceTimer);
-    autocompleteDebounceTimer = setTimeout(async () => {
-      const q = searchInput.value.trim();
-      if (!q) {
-        popover.classList.add('hidden');
-        await loadSmsThreads();
-        return;
-      }
-      const matches = await searchContacts(q);
-      renderAutocompletePopover(popover, matches);
-    }, 150);
+  // 1. Sidebar Search Autocomplete
+  searchAutocomplete = new ContactAutocomplete(searchInput, searchPopover, async (contact) => {
+    searchInput.value = '';
+    const { smsThreads = {} } = await chrome.storage.local.get('smsThreads');
+    const targetDigits = contact.cleanDigits || normalizePhoneNumber(contact.phone);
+
+    // Look for matching existing thread
+    const existingThread = Object.values(smsThreads).find(t => {
+      const addrDigits = normalizePhoneNumber(t.address);
+      return addrDigits.includes(targetDigits) || targetDigits.includes(addrDigits);
+    });
+
+    if (existingThread) {
+      activeThreadId = String(existingThread.threadId);
+      document.getElementById('new-recipient-bar').classList.add('hidden');
+      await loadSmsThreads();
+    } else {
+      startNewConversation(contact.phone, contact.name);
+    }
   });
 
-  // Close autocomplete on click outside
-  document.addEventListener('click', (e) => {
-    if (!popover.contains(e.target) && e.target !== searchInput) {
-      popover.classList.add('hidden');
-    }
+  // 2. Compose View Recipient Autocomplete
+  composeAutocomplete = new ContactAutocomplete(newRecipientInput, composePopover, (contact) => {
+    newRecipientInput.value = contact.phone;
+    newChatRecipient = contact.phone;
+    document.getElementById('chat-header-name').textContent = contact.name;
+    document.getElementById('chat-header-phone').textContent = formatPhoneNumber(contact.phone);
+    composerInput.focus();
   });
 
   // New Chat action
@@ -547,22 +741,32 @@ function setupThreadedSms() {
 
     let targetRecipient = '';
     let targetThreadId = activeThreadId;
+    let isGroup = false;
+    let recipientsList = [];
+
+    const { smsThreads = {} } = await chrome.storage.local.get('smsThreads');
+    const thread = smsThreads[String(activeThreadId)];
 
     if (activeThreadId === 'new_chat') {
       targetRecipient = newRecipientInput.value.trim();
       if (!targetRecipient) {
-        showToast('Please enter a recipient phone number.');
+        showToast('Please enter a recipient phone number or contact.');
         newRecipientInput.focus();
         return;
       }
+      // Check if recipient contains multiple numbers (group compose)
+      if (targetRecipient.includes(',') || targetRecipient.includes(';')) {
+        isGroup = true;
+        recipientsList = targetRecipient.split(/[,;]+/).map(s => s.trim()).filter(Boolean);
+      }
     } else {
-      const { smsThreads = {} } = await chrome.storage.local.get('smsThreads');
-      const thread = smsThreads[String(activeThreadId)];
       if (!thread) {
         showToast('No active conversation selected.');
         return;
       }
       targetRecipient = thread.address;
+      isGroup = !!thread.isGroup || (thread.recipients && thread.recipients.length > 1);
+      recipientsList = (thread.recipients || []).map(r => r.phone || r.cleanDigits || r);
     }
 
     composerInput.value = '';
@@ -570,12 +774,18 @@ function setupThreadedSms() {
     fileInput.value = '';
     attachmentPreview.classList.add('hidden');
 
+    if (!phoneIsOnline) {
+      showToast('⚠️ Phone is offline. Message queued for delivery on reconnect.');
+    }
+
     try {
       const res = await chrome.runtime.sendMessage({
         type: 'SEND_CHAT_MESSAGE',
         targetDeviceId: currentTargetDeviceId || 'android_companion',
         threadId: targetThreadId !== 'new_chat' ? targetThreadId : 0,
         recipient: targetRecipient,
+        isGroup,
+        recipients: recipientsList,
         messageBody: text,
         attachment: selectedChatAttachment
       });
@@ -586,7 +796,7 @@ function setupThreadedSms() {
           document.getElementById('new-recipient-bar').classList.add('hidden');
         }
         await loadSmsThreads();
-        renderActiveConversation();
+        await renderActiveConversation();
       } else {
         showToast('Failed to dispatch message to phone.');
       }
@@ -597,7 +807,7 @@ function setupThreadedSms() {
 }
 
 async function triggerSmsSync() {
-  showToast('Requesting SMS message threads from Android phone...');
+  showToast('Requesting SMS & MMS threads from Android phone...');
   try {
     await chrome.runtime.sendMessage({
       type: 'TRIGGER_SMS_SYNC',
@@ -605,7 +815,7 @@ async function triggerSmsSync() {
     });
     setTimeout(async () => {
       await loadSmsThreads();
-      showToast('✓ SMS threads refreshed from phone');
+      showToast('✓ SMS & Group threads refreshed from phone');
     }, 2000);
   } catch (err) {
     showToast(`Sync error: ${err.message}`);
@@ -619,13 +829,19 @@ function startNewConversation(recipientPhone = '', recipientName = '') {
   const headerAvatar = document.getElementById('chat-header-avatar');
   const headerName = document.getElementById('chat-header-name');
   const headerPhone = document.getElementById('chat-header-phone');
+  const groupBadge = document.getElementById('chat-group-badge');
+  const participantsContainer = document.getElementById('chat-group-participants');
+  const broadcastNotice = document.getElementById('chat-group-broadcast-notice');
   const recipientBar = document.getElementById('new-recipient-bar');
   const recipientInput = document.getElementById('new-recipient-input');
   const container = document.getElementById('chat-messages-container');
 
   headerAvatar.textContent = '+';
   headerName.textContent = recipientName || 'New Conversation';
-  headerPhone.textContent = recipientPhone || 'Select recipient below';
+  headerPhone.textContent = recipientPhone ? formatPhoneNumber(recipientPhone) : 'Type recipient name or number below';
+  groupBadge.classList.add('hidden');
+  participantsContainer.classList.add('hidden');
+  broadcastNotice.classList.add('hidden');
 
   recipientBar.classList.remove('hidden');
   recipientInput.value = recipientPhone;
@@ -637,11 +853,10 @@ function startNewConversation(recipientPhone = '', recipientName = '') {
         ✉️
       </div>
       <p class="text-xs font-semibold text-slate-300">Start New Message</p>
-      <p class="text-[11px] text-slate-500 mt-1 max-w-xs">Type a phone number or select a Google Contact to begin.</p>
+      <p class="text-[11px] text-slate-500 mt-1 max-w-xs">Type a contact name, phone number, or comma-separated numbers for a group text.</p>
     </div>
   `;
 
-  // Deselect sidebar items
   document.querySelectorAll('.thread-item-card').forEach(el => el.classList.remove('bg-slate-800', 'border-sky-500'));
 }
 
@@ -654,7 +869,6 @@ async function loadSmsThreads() {
   let threadsList = Object.values(smsThreads);
 
   if (threadsList.length === 0) {
-    // Attempt fetching from Firebase RTDB
     try {
       const res = await chrome.runtime.sendMessage({
         type: 'FETCH_SMS_THREADS',
@@ -673,53 +887,114 @@ async function loadSmsThreads() {
   }
 
   // Sort newest first
-  threadsList.sort((a, b) => b.lastTimestamp - a.lastTimestamp);
+  threadsList.sort((a, b) => (b.lastTimestamp || 0) - (a.lastTimestamp || 0));
 
   counter.textContent = threadsList.length;
   summaryText.textContent = `${threadsList.length} conversation${threadsList.length === 1 ? '' : 's'}`;
 
   container.innerHTML = '';
-  threadsList.forEach(thread => {
-    const card = createThreadListItem(thread);
+  for (const thread of threadsList) {
+    const card = await createThreadListItem(thread);
     container.appendChild(card);
-  });
+  }
 
   // Select first thread by default if none selected
   if (!activeThreadId && threadsList.length > 0) {
     activeThreadId = String(threadsList[0].threadId);
   }
 
-  renderActiveConversation();
+  await renderActiveConversation();
 }
 
-function createThreadListItem(thread) {
+/**
+ * Requirement 1 & 2: Renders thread list item with full contact resolution,
+ * avatar/initials, and group chat indicator.
+ */
+async function createThreadListItem(thread) {
   const item = document.createElement('div');
   const isSelected = String(thread.threadId) === String(activeThreadId);
   item.className = `thread-item-card p-3 flex items-center gap-2.5 cursor-pointer transition border-l-2 select-none hover:bg-slate-800/60 ${
     isSelected ? 'bg-slate-800 border-sky-500' : 'border-transparent'
   }`;
 
-  const displayName = thread.contactName || thread.address || 'Unknown';
-  const initials = getInitials(displayName);
+  const {
+    googleContactsCache = [],
+    deviceContactsCache = {}
+  } = await chrome.storage.local.get(['googleContactsCache', 'deviceContactsCache']);
+
+  const deviceList = Array.isArray(deviceContactsCache)
+    ? deviceContactsCache
+    : Object.values(deviceContactsCache);
+
+  const isGroup = !!thread.isGroup || (thread.recipients && thread.recipients.length > 1);
+
+  let displayName = '';
+  let avatarHtml = '';
+
+  if (isGroup) {
+    // Group conversation
+    const recips = thread.recipients || [];
+    if (thread.groupTitle && thread.groupTitle.trim()) {
+      displayName = thread.groupTitle;
+    } else if (recips.length > 0) {
+      displayName = recips.map(r => {
+        const iden = resolveContactIdentity(r.phone || r.cleanDigits || r, googleContactsCache, deviceList);
+        return iden.name;
+      }).join(', ');
+    } else {
+      displayName = formatPhoneNumber(thread.address) || 'Group Chat';
+    }
+
+    avatarHtml = `
+      <div class="w-9 h-9 rounded-full bg-gradient-to-tr from-purple-600 to-indigo-600 flex items-center justify-center text-white text-sm font-bold shrink-0 shadow-sm">
+        👥
+      </div>
+    `;
+  } else {
+    // 1-on-1 SMS conversation: Resolve identity from Google & device contacts
+    const identity = resolveContactIdentity(thread.address, googleContactsCache, deviceList);
+
+    if (thread.contactName && !thread.contactName.match(/^[+\d\s()-]+$/)) {
+      displayName = thread.contactName;
+    } else {
+      displayName = identity.name;
+    }
+
+    if (identity.avatarUrl) {
+      avatarHtml = `
+        <div class="w-9 h-9 rounded-full overflow-hidden border border-slate-700 shrink-0 shadow-sm">
+          <img src="${identity.avatarUrl}" class="w-full h-full object-cover">
+        </div>
+      `;
+    } else {
+      avatarHtml = `
+        <div class="w-9 h-9 rounded-full bg-gradient-to-tr from-sky-600 to-indigo-600 flex items-center justify-center text-white text-xs font-bold shrink-0 shadow-sm">
+          ${escapeHtml(identity.initials)}
+        </div>
+      `;
+    }
+  }
+
   const timeStr = formatTimestamp(thread.lastTimestamp);
 
   item.innerHTML = `
     <!-- Contact Avatar -->
-    <div class="w-9 h-9 rounded-full bg-gradient-to-tr from-sky-600 to-indigo-600 flex items-center justify-center text-white text-xs font-bold shrink-0 shadow-sm">
-      ${initials}
-    </div>
+    ${avatarHtml}
 
     <!-- Info & Snippet -->
     <div class="flex-1 min-w-0">
       <div class="flex items-center justify-between mb-0.5">
         <h3 class="text-xs font-bold text-slate-100 truncate">${escapeHtml(displayName)}</h3>
-        <span class="text-[10px] text-slate-500 shrink-0">${timeStr}</span>
+        <span class="text-[10px] text-slate-500 shrink-0 ml-1">${timeStr}</span>
       </div>
-      <p class="text-[11px] text-slate-400 truncate">${escapeHtml(thread.snippet || 'No messages')}</p>
+      <div class="flex items-center justify-between">
+        <p class="text-[11px] text-slate-400 truncate flex-1">${escapeHtml(thread.snippet || 'No messages')}</p>
+        ${isGroup ? `<span class="text-[9px] bg-purple-500/20 text-purple-300 border border-purple-500/30 px-1 py-0.2 rounded ml-1 font-medium shrink-0">Group</span>` : ''}
+      </div>
     </div>
 
     ${thread.unreadCount > 0 ? `
-      <span class="bg-sky-500 text-white text-[10px] font-bold px-1.5 py-0.2 rounded-full shrink-0">
+      <span class="bg-sky-500 text-white text-[10px] font-bold px-1.5 py-0.2 rounded-full shrink-0 ml-1">
         ${thread.unreadCount}
       </span>
     ` : ''}
@@ -736,25 +1011,90 @@ function createThreadListItem(thread) {
   return item;
 }
 
+/**
+ * Requirement 1 & 2: Renders active chat with group details, participant chips,
+ * and sender resolution for each bubble.
+ */
 async function renderActiveConversation() {
   if (activeThreadId === 'new_chat') return;
 
   const headerAvatar = document.getElementById('chat-header-avatar');
   const headerName = document.getElementById('chat-header-name');
   const headerPhone = document.getElementById('chat-header-phone');
+  const groupBadge = document.getElementById('chat-group-badge');
+  const participantsContainer = document.getElementById('chat-group-participants');
+  const broadcastNotice = document.getElementById('chat-group-broadcast-notice');
+  const broadcastText = document.getElementById('chat-group-broadcast-text');
   const container = document.getElementById('chat-messages-container');
 
-  const { smsThreads = {} } = await chrome.storage.local.get('smsThreads');
+  const {
+    smsThreads = {},
+    googleContactsCache = [],
+    deviceContactsCache = {}
+  } = await chrome.storage.local.get(['smsThreads', 'googleContactsCache', 'deviceContactsCache']);
+
+  const deviceList = Array.isArray(deviceContactsCache)
+    ? deviceContactsCache
+    : Object.values(deviceContactsCache);
+
   let threadsList = Object.values(smsThreads);
   if (threadsList.length === 0) threadsList = getFallbackSmsThreads();
 
   const thread = threadsList.find(t => String(t.threadId) === String(activeThreadId));
   if (!thread) return;
 
-  const displayName = thread.contactName || thread.address || 'Unknown';
-  headerAvatar.textContent = getInitials(displayName);
-  headerName.textContent = displayName;
-  headerPhone.textContent = thread.address || '';
+  const isGroup = !!thread.isGroup || (thread.recipients && thread.recipients.length > 1);
+  const recips = thread.recipients || [];
+
+  if (isGroup) {
+    headerAvatar.textContent = '👥';
+    headerAvatar.className = 'w-8 h-8 rounded-full bg-gradient-to-tr from-purple-600 to-indigo-600 border border-purple-500/40 flex items-center justify-center font-bold text-xs text-white shrink-0 shadow-sm';
+
+    let title = thread.groupTitle;
+    if (!title && recips.length > 0) {
+      title = recips.map(r => resolveContactIdentity(r.phone || r.cleanDigits || r, googleContactsCache, deviceList).name).join(', ');
+    }
+    headerName.textContent = title || 'Group Conversation';
+    headerPhone.textContent = `Group Chat • ${recips.length || 2} participants`;
+    groupBadge.classList.remove('hidden');
+
+    // Render Participant Chips
+    participantsContainer.innerHTML = '';
+    if (recips.length > 0) {
+      recips.forEach(r => {
+        const iden = resolveContactIdentity(r.phone || r.cleanDigits || r, googleContactsCache, deviceList);
+        const chip = document.createElement('span');
+        chip.className = 'inline-flex items-center gap-1 bg-slate-800 border border-slate-700 text-slate-300 text-[10px] px-2 py-0.5 rounded-full';
+        chip.innerHTML = `<span class="text-purple-400 font-bold">•</span> ${escapeHtml(iden.name)}`;
+        participantsContainer.appendChild(chip);
+      });
+      participantsContainer.classList.remove('hidden');
+    } else {
+      participantsContainer.classList.add('hidden');
+    }
+
+    broadcastNotice.classList.remove('hidden');
+    broadcastText.textContent = `Group Conversation: Outbound message will broadcast to all ${recips.length || 'group'} participants.`;
+  } else {
+    // 1-on-1 Contact Identity Resolution
+    const identity = resolveContactIdentity(thread.address, googleContactsCache, deviceList);
+    const displayName = (thread.contactName && !thread.contactName.match(/^[+\d\s()-]+$/))
+      ? thread.contactName
+      : identity.name;
+
+    if (identity.avatarUrl) {
+      headerAvatar.innerHTML = `<img src="${identity.avatarUrl}" class="w-full h-full rounded-full object-cover">`;
+    } else {
+      headerAvatar.textContent = identity.initials;
+    }
+    headerAvatar.className = 'w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-xs text-sky-400 shrink-0';
+
+    headerName.textContent = displayName;
+    headerPhone.textContent = formatPhoneNumber(thread.address);
+    groupBadge.classList.add('hidden');
+    participantsContainer.classList.add('hidden');
+    broadcastNotice.classList.add('hidden');
+  }
 
   // Extract messages and sort chronologically (oldest to newest)
   const rawMessages = thread.messages ? Object.values(thread.messages) : [];
@@ -781,7 +1121,14 @@ async function renderActiveConversation() {
       lastDateStr = msgDate;
     }
 
-    const bubble = createChatBubble(msg, displayName);
+    // Resolve sender identity for message bubble
+    let senderName = msg.contactName;
+    if (!senderName || senderName.match(/^[+\d\s()-]+$/)) {
+      const senderIden = resolveContactIdentity(msg.address, googleContactsCache, deviceList);
+      senderName = senderIden.name;
+    }
+
+    const bubble = createChatBubble(msg, senderName, isGroup);
     container.appendChild(bubble);
   });
 
@@ -789,7 +1136,7 @@ async function renderActiveConversation() {
   container.scrollTop = container.scrollHeight;
 }
 
-function createChatBubble(msg, contactName) {
+function createChatBubble(msg, senderName, isGroupChat = false) {
   const row = document.createElement('div');
   const isIncoming = msg.isIncoming;
   const timeStr = formatTimestamp(msg.timestamp);
@@ -802,7 +1149,12 @@ function createChatBubble(msg, contactName) {
 
   row.innerHTML = `
     <div class="max-w-[78%] px-3.5 py-2 text-xs leading-relaxed break-words ${bubbleClass}">
-      ${isIncoming && contactName ? `<p class="text-[10px] font-bold text-sky-400 mb-0.5">${escapeHtml(contactName)}</p>` : ''}
+      ${isIncoming && isGroupChat && senderName ? `
+        <p class="text-[10px] font-bold text-sky-400 mb-0.5 flex items-center gap-1">
+          <span class="w-1.5 h-1.5 rounded-full bg-sky-400"></span>
+          ${escapeHtml(senderName)}
+        </p>
+      ` : ''}
       <p class="select-text whitespace-pre-wrap">${escapeHtml(msg.body)}</p>
     </div>
     <div class="flex items-center gap-1 text-[10px] text-slate-500 px-1">
@@ -814,57 +1166,8 @@ function createChatBubble(msg, contactName) {
   return row;
 }
 
-function renderAutocompletePopover(popover, matches) {
-  if (matches.length === 0) {
-    popover.innerHTML = '<div class="p-3 text-xs text-slate-500 text-center">No matching Google Contacts found.</div>';
-    popover.classList.remove('hidden');
-    return;
-  }
-
-  popover.innerHTML = '';
-  matches.forEach(contact => {
-    const item = document.createElement('div');
-    item.className = 'p-2.5 flex items-center gap-2.5 hover:bg-slate-800 cursor-pointer transition select-none';
-
-    item.innerHTML = `
-      <div class="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center font-bold text-xs text-sky-300 shrink-0">
-        ${contact.photoUrl ? `<img src="${contact.photoUrl}" class="w-full h-full rounded-full object-cover">` : contact.initials}
-      </div>
-      <div class="flex-1 min-w-0">
-        <p class="text-xs font-bold text-slate-100 truncate">${escapeHtml(contact.name)}</p>
-        <p class="text-[11px] text-slate-400 font-mono truncate">${escapeHtml(contact.phone)} (${contact.type})</p>
-      </div>
-    `;
-
-    item.addEventListener('click', async () => {
-      popover.classList.add('hidden');
-      document.getElementById('sms-search-input').value = '';
-
-      // Check if thread already exists for this phone
-      const { smsThreads = {} } = await chrome.storage.local.get('smsThreads');
-      const cleanTarget = contact.cleanDigits;
-      const existingThread = Object.values(smsThreads).find(t =>
-        (t.address && t.address.replace(/\D/g, '').includes(cleanTarget)) ||
-        (cleanTarget.includes(t.address.replace(/\D/g, '')))
-      );
-
-      if (existingThread) {
-        activeThreadId = String(existingThread.threadId);
-        document.getElementById('new-recipient-bar').classList.add('hidden');
-        await loadSmsThreads();
-      } else {
-        startNewConversation(contact.phone, contact.name);
-      }
-    });
-
-    popover.appendChild(item);
-  });
-
-  popover.classList.remove('hidden');
-}
-
 // =============================================================
-// 6. Clipboard Sync
+// 7. Clipboard Sync
 // =============================================================
 function setupClipboardSync() {
   const phoneClipText = document.getElementById('phone-clip-text');
@@ -929,21 +1232,31 @@ async function loadClipboardState() {
 }
 
 // =============================================================
-// 7. Global Listeners & Utilities
+// 8. Global Listeners & Utilities
 // =============================================================
 function setupGlobalEvents() {
-  // Test Toast Alert
   document.getElementById('btn-test-toast')?.addEventListener('click', async () => {
     await chrome.runtime.sendMessage({ type: 'TEST_NOTIFICATION_ALERT' });
     await loadNotifications();
   });
 
+  // Check status button on offline banner
+  document.getElementById('btn-reconnect-check')?.addEventListener('click', async () => {
+    await checkStreamStatus();
+    await checkDevicePresence();
+    showToast('Checking device presence status...');
+  });
+
   // Listen for real-time background broadcasts
-  chrome.runtime.onMessage.addListener((message) => {
+  chrome.runtime.onMessage.addListener(async (message) => {
     if (message.type === 'NOTIFICATION_RECEIVED') {
       loadNotifications();
     } else if (message.type === 'SMS_THREADS_UPDATED') {
       loadSmsThreads();
+    } else if (message.type === 'DEVICE_CONTACTS_UPDATED') {
+      loadSmsThreads();
+    } else if (message.type === 'DEVICE_PRESENCE_CHANGED') {
+      updatePresenceUI(message.presence);
     } else if (message.type === 'CLIPBOARD_UPDATED') {
       loadClipboardState();
     }
@@ -975,13 +1288,6 @@ function formatBytes(bytes) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
 
-function getInitials(name) {
-  if (!name) return '??';
-  const parts = name.trim().split(/\s+/);
-  if (parts.length === 1) return parts[0].substring(0, 2).toUpperCase();
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-}
-
 function escapeHtml(str) {
   if (!str) return '';
   return String(str)
@@ -992,8 +1298,68 @@ function escapeHtml(str) {
     .replace(/'/g, '&#039;');
 }
 
+/**
+ * Robust demo threads including 1-on-1 and multi-recipient group conversations
+ */
 function getFallbackSmsThreads() {
   return [
+    {
+      threadId: 201,
+      address: '+1 (555) 234-5678, +1 (555) 876-5432, +1 (555) 901-2345',
+      contactName: 'Weekend Hike & BBQ',
+      groupTitle: 'Weekend Hike & BBQ',
+      isGroup: true,
+      recipients: [
+        { phone: '+1 (555) 234-5678', name: 'Alice Cooper', cleanDigits: '5552345678' },
+        { phone: '+1 (555) 876-5432', name: 'Bob Martinez', cleanDigits: '5558765432' },
+        { phone: '+1 (555) 901-2345', name: 'Sarah Connor', cleanDigits: '5559012345' }
+      ],
+      snippet: 'Sarah: Sounds great, count me in for the trailhead at 9 AM!',
+      lastTimestamp: Date.now() - 1000 * 60 * 5,
+      unreadCount: 2,
+      messages: {
+        g1: {
+          id: 'g1',
+          threadId: 201,
+          address: '+1 (555) 234-5678',
+          contactName: 'Alice Cooper',
+          body: 'Hey everyone! Are we still planning on meeting at Bear Peak this Saturday?',
+          timestamp: Date.now() - 1000 * 60 * 30,
+          isIncoming: true,
+          isRead: true
+        },
+        g2: {
+          id: 'g2',
+          threadId: 201,
+          address: '+1 (555) 876-5432',
+          contactName: 'Bob Martinez',
+          body: 'Yes! Weather looks clear and sunny.',
+          timestamp: Date.now() - 1000 * 60 * 18,
+          isIncoming: true,
+          isRead: true
+        },
+        g3: {
+          id: 'g3',
+          threadId: 201,
+          address: 'chrome_desktop',
+          contactName: 'Me',
+          body: 'I can bring snacks and trail mix for the group.',
+          timestamp: Date.now() - 1000 * 60 * 10,
+          isIncoming: false,
+          isRead: true
+        },
+        g4: {
+          id: 'g4',
+          threadId: 201,
+          address: '+1 (555) 901-2345',
+          contactName: 'Sarah Connor',
+          body: 'Sounds great, count me in for the trailhead at 9 AM!',
+          timestamp: Date.now() - 1000 * 60 * 5,
+          isIncoming: true,
+          isRead: false
+        }
+      }
+    },
     {
       threadId: 101,
       address: '+1 (555) 234-5678',
@@ -1001,6 +1367,8 @@ function getFallbackSmsThreads() {
       snippet: 'Are we still on for lunch today?',
       lastTimestamp: Date.now() - 1000 * 60 * 12,
       unreadCount: 1,
+      isGroup: false,
+      recipients: [],
       messages: {
         m1: {
           id: 'm1',
@@ -1038,6 +1406,8 @@ function getFallbackSmsThreads() {
       snippet: 'The server deployment finished cleanly.',
       lastTimestamp: Date.now() - 1000 * 60 * 90,
       unreadCount: 0,
+      isGroup: false,
+      recipients: [],
       messages: {
         m4: {
           id: 'm4',

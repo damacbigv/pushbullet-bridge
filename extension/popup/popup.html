@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PushBridge v2 - Notification & SMS Dashboard</title>
+  <title>PushBridge v2.5 - Notification & Threaded SMS Bridge</title>
   <link rel="stylesheet" href="tailwind.css">
 </head>
-<body class="w-[760px] h-[580px] bg-slate-950 text-slate-100 flex flex-col font-sans select-none antialiased overflow-hidden">
+<body class="w-[780px] h-[590px] bg-slate-950 text-slate-100 flex flex-col font-sans select-none antialiased overflow-hidden">
 
   <!-- Header -->
   <header class="bg-slate-900/95 backdrop-blur border-b border-slate-800 px-4 py-2.5 flex items-center justify-between shrink-0 z-30">
@@ -18,8 +18,14 @@
       <div class="flex items-center gap-2">
         <h1 class="text-sm font-bold tracking-tight text-white flex items-center gap-1.5">
           PushBridge
-          <span class="text-[10px] font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/20 px-1.5 py-0.5 rounded">v2.0</span>
+          <span class="text-[10px] font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/20 px-1.5 py-0.5 rounded">v2.5</span>
         </h1>
+      </div>
+
+      <!-- Phone Presence Heartbeat Status Badge -->
+      <div id="phone-presence-badge" class="flex items-center gap-1.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-2.5 py-0.5 rounded-full text-[11px] font-medium transition cursor-default" title="Android Companion Real-time Presence">
+        <span id="phone-presence-dot" class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span id="phone-presence-text">Phone Online</span>
       </div>
 
       <!-- Google Contacts Badge / Auth Action -->
@@ -32,7 +38,7 @@
     <!-- Header Actions -->
     <div class="flex items-center gap-2">
       <!-- Device Selector -->
-      <select id="target-device-select" class="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-lg px-2.5 py-1 outline-none focus:border-sky-500 cursor-pointer">
+      <select id="target-device-select" class="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-lg px-2.5 py-1 outline-none focus:border-sky-500 cursor-pointer max-w-[170px] truncate">
         <option value="">Detecting phone...</option>
       </select>
 
@@ -50,6 +56,15 @@
     </div>
   </header>
 
+  <!-- Global Offline Warning Banner (Shown when companion drops offline) -->
+  <div id="phone-offline-banner" class="hidden px-4 py-2 bg-amber-500/10 border-b border-amber-500/20 text-amber-300 text-xs flex items-center justify-between z-20 shrink-0">
+    <div class="flex items-center gap-2">
+      <span class="text-sm">⚠️</span>
+      <span>Android phone is currently offline. Outbound messages will queue until reconnected.</span>
+    </div>
+    <span class="text-[10px] text-amber-400/80 font-mono">Sync paused</span>
+  </div>
+
   <!-- Primary Navigation Tabs -->
   <nav class="flex border-b border-slate-800 bg-slate-900/50 px-3 text-xs font-medium shrink-0">
     <button id="tab-btn-feed" data-tab="tab-feed" class="tab-button active py-2.5 px-4 text-center text-sky-400 border-b-2 border-sky-500 font-semibold flex items-center justify-center gap-2 transition">
@@ -57,7 +72,7 @@
       <span id="feed-counter" class="bg-sky-500/20 text-sky-300 text-[10px] px-1.5 py-0.2 rounded-full font-bold">0</span>
     </button>
     <button id="tab-btn-sms" data-tab="tab-sms" class="tab-button py-2.5 px-4 text-center text-slate-400 hover:text-slate-200 border-b-2 border-transparent font-medium flex items-center justify-center gap-2 transition">
-      <span>Threaded SMS</span>
+      <span>Threaded SMS &amp; Group Chat</span>
       <span id="threads-counter" class="bg-slate-800 text-slate-400 text-[10px] px-1.5 py-0.2 rounded-full font-bold">0</span>
     </button>
     <button id="tab-btn-clip" data-tab="tab-clip" class="tab-button py-2.5 px-4 text-center text-slate-400 hover:text-slate-200 border-b-2 border-transparent font-medium flex items-center justify-center gap-2 transition">
@@ -66,7 +81,7 @@
   </nav>
 
   <!-- Tab Contents Viewport -->
-  <main class="flex-1 overflow-hidden relative">
+  <main class="flex-1 overflow-hidden relative flex flex-col">
 
     <!-- ======================================================== -->
     <!-- TAB 1: NOTIFICATIONS TAB (Bundled vs Chronological)       -->
@@ -113,17 +128,18 @@
     </section>
 
     <!-- ======================================================== -->
-    <!-- TAB 2: THREADED SMS CHAT INTERFACE (Split-Pane Layout)   -->
+    <!-- TAB 2: THREADED SMS & GROUP CHAT INTERFACE               -->
     <!-- ======================================================== -->
     <section id="tab-sms" class="tab-pane hidden h-full flex overflow-hidden">
 
       <!-- LEFT SIDEBAR: Contact & Conversation Threads List -->
-      <aside class="w-[280px] border-r border-slate-800 flex flex-col bg-slate-900/60 shrink-0">
+      <aside class="w-[290px] border-r border-slate-800 flex flex-col bg-slate-900/60 shrink-0">
         <!-- Search & New Message Bar -->
         <div class="p-2.5 border-b border-slate-800 space-y-2 relative">
           <div class="flex items-center gap-1.5">
             <div class="relative flex-1">
-              <input type="text" id="sms-search-input" placeholder="Search Google Contacts or SMS..."
+              <input type="text" id="sms-search-input" placeholder="Search contacts, names or SMS..."
+                autocomplete="off"
                 class="w-full bg-slate-950 border border-slate-800 rounded-lg pl-7 pr-2.5 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500">
               <span class="absolute left-2.5 top-2 text-slate-500 text-xs">🔍</span>
             </div>
@@ -132,7 +148,7 @@
             </button>
           </div>
 
-          <!-- Google Contacts Autocomplete Popover -->
+          <!-- Contacts Autocomplete Popover (Keyboard Accessible) -->
           <div id="contacts-autocomplete-popover" class="hidden absolute left-2.5 right-2.5 top-[44px] bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-40 max-h-[260px] overflow-y-auto divide-y divide-slate-800/80">
             <!-- Rendered dynamically -->
           </div>
@@ -157,17 +173,22 @@
 
         <!-- Active Conversation Header -->
         <div id="chat-header" class="px-4 py-2.5 border-b border-slate-800 bg-slate-900/40 flex items-center justify-between shrink-0">
-          <div class="flex items-center gap-2.5">
-            <div id="chat-header-avatar" class="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-xs text-sky-400">
+          <div class="flex items-center gap-2.5 min-w-0 flex-1 mr-2">
+            <div id="chat-header-avatar" class="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-xs text-sky-400 shrink-0">
               --
             </div>
-            <div>
-              <h2 id="chat-header-name" class="text-xs font-bold text-slate-100">Select a conversation</h2>
-              <p id="chat-header-phone" class="text-[10px] text-slate-500 font-mono"></p>
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-1.5">
+                <h2 id="chat-header-name" class="text-xs font-bold text-slate-100 truncate">Select a conversation</h2>
+                <span id="chat-group-badge" class="hidden text-[10px] bg-purple-500/10 text-purple-300 border border-purple-500/20 px-1.5 py-0.2 rounded font-medium shrink-0">Group</span>
+              </div>
+              <p id="chat-header-phone" class="text-[10px] text-slate-400 font-mono truncate"></p>
+              <!-- Multi-recipient Chips Bar (For Group Chats) -->
+              <div id="chat-group-participants" class="hidden flex flex-wrap gap-1 mt-1 max-h-[38px] overflow-y-auto"></div>
             </div>
           </div>
 
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-2 shrink-0">
             <span id="chat-carrier-indicator" class="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-medium">
               Android SIM Active
             </span>
@@ -175,10 +196,15 @@
         </div>
 
         <!-- New Message Recipient Bar (Visible only when composing to new contact) -->
-        <div id="new-recipient-bar" class="hidden px-4 py-2 border-b border-slate-800 bg-slate-900/80 flex items-center gap-2">
+        <div id="new-recipient-bar" class="hidden px-4 py-2 border-b border-slate-800 bg-slate-900/80 relative flex items-center gap-2">
           <label for="new-recipient-input" class="text-xs text-slate-400 font-medium shrink-0">To:</label>
-          <input type="tel" id="new-recipient-input" placeholder="Type phone number or contact name..."
-            class="flex-1 bg-transparent border-none text-xs text-white placeholder-slate-600 focus:outline-none">
+          <div class="relative flex-1">
+            <input type="text" id="new-recipient-input" placeholder="Type name or phone number..."
+              autocomplete="off"
+              class="w-full bg-transparent border-none text-xs text-white placeholder-slate-600 focus:outline-none">
+            <!-- Autocomplete Popover for Compose Input -->
+            <div id="compose-autocomplete-popover" class="hidden absolute left-0 right-0 top-[32px] bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-40 max-h-[220px] overflow-y-auto divide-y divide-slate-800/80"></div>
+          </div>
         </div>
 
         <!-- Scrollable Chat Messages Container -->
@@ -191,6 +217,12 @@
             <p class="text-xs font-semibold text-slate-300">No Conversation Selected</p>
             <p class="text-[11px] text-slate-500 mt-1 max-w-xs">Select a conversation from the left sidebar or start a new chat using Google Contacts.</p>
           </div>
+        </div>
+
+        <!-- Group Broadcast Info Strip -->
+        <div id="chat-group-broadcast-notice" class="hidden px-4 py-1.5 bg-indigo-950/40 text-[11px] text-indigo-300 border-t border-indigo-900/50 flex items-center gap-2">
+          <span>👥</span>
+          <span id="chat-group-broadcast-text">Group Conversation: Message will broadcast to all recipients.</span>
         </div>
 
         <!-- Attachment Preview Pill (Above composer) -->

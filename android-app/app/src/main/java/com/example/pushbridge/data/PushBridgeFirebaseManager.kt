@@ -14,9 +14,7 @@ import com.example.pushbridge.util.SmsSendResult
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
 import com.google.firebase.database.*
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.*
 import java.util.UUID
 
 object PushBridgeFirebaseManager {
@@ -29,11 +27,12 @@ object PushBridgeFirebaseManager {
     private const val FIREBASE_SENDER_ID = "250338142494"
     private const val FIREBASE_STORAGE_BUCKET = "pushclonebridge.firebasestorage.app"
 
-    private val scope = CoroutineScope(Dispatchers.IO)
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var isInitialized = false
     private var database: FirebaseDatabase? = null
     private var inboundListener: ChildEventListener? = null
     private var inboundRef: DatabaseReference? = null
+    private var heartbeatJob: Job? = null
 
     /**
      * Initializes the Firebase Android SDK programmatically using provided configuration credentials.
@@ -57,7 +56,6 @@ object PushBridgeFirebaseManager {
             }
 
             database = FirebaseDatabase.getInstance(app, FIREBASE_RTDB_URL)
-            // Enable disk persistence for resilient offline-to-online sync
             try {
                 database?.setPersistenceEnabled(true)
             } catch (_: Exception) {
@@ -68,9 +66,66 @@ object PushBridgeFirebaseManager {
             Log.i(TAG, "Firebase initialized successfully for project: $FIREBASE_PROJECT_ID")
 
             registerDeviceState(context)
+            setupPresence(context)
             startInboundCommandListener(context)
         } catch (e: Exception) {
             Log.e(TAG, "Error initializing Firebase: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Sets up real-time device presence and connection status via `.info/connected`.
+     * Automatically updates `devices/{deviceId}/presence/online` and registers `onDisconnect`.
+     */
+    fun setupPresence(context: Context) {
+        val deviceId = getDeviceId(context)
+        val connectedRef = database?.getReference(".info/connected") ?: return
+        val presenceRef = database?.getReference("devices")?.child(deviceId)?.child("presence") ?: return
+
+        connectedRef.addValueEventListener(object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                val connected = snapshot.getValue(Boolean::class.java) ?: false
+                if (connected) {
+                    val deviceName = "${Build.MANUFACTURER} ${Build.MODEL}"
+                    presenceRef.child("online").setValue(true)
+                    presenceRef.child("lastHeartbeat").setValue(ServerValue.TIMESTAMP)
+                    presenceRef.child("deviceName").setValue(deviceName)
+
+                    // On disconnect, mark offline and record disconnection timestamp
+                    presenceRef.child("online").onDisconnect().setValue(false)
+                    presenceRef.child("lastHeartbeat").onDisconnect().setValue(ServerValue.TIMESTAMP)
+
+                    Log.i(TAG, "Presence active: device $deviceId is ONLINE")
+
+                    // Synchronize threads and contacts automatically on connect
+                    syncAllSmsThreads(context)
+                    syncDeviceContacts(context)
+                }
+            }
+
+            override fun onCancelled(error: DatabaseError) {
+                Log.w(TAG, "Presence listener cancelled: ${error.message}")
+            }
+        })
+
+        // Start 30-second heartbeat loop
+        startHeartbeatLoop(context)
+    }
+
+    private fun startHeartbeatLoop(context: Context) {
+        heartbeatJob?.cancel()
+        heartbeatJob = scope.launch {
+            val deviceId = getDeviceId(context)
+            val presenceRef = database?.getReference("devices")?.child(deviceId)?.child("presence")
+            while (isActive) {
+                delay(30_000L)
+                try {
+                    presenceRef?.child("lastHeartbeat")?.setValue(ServerValue.TIMESTAMP)
+                    presenceRef?.child("online")?.setValue(true)
+                } catch (e: Exception) {
+                    Log.d(TAG, "Heartbeat ping error: ${e.message}")
+                }
+            }
         }
     }
 
@@ -150,7 +205,7 @@ object PushBridgeFirebaseManager {
     }
 
     /**
-     * Reads SMS conversations from device Telephony database and syncs full message histories
+     * Reads SMS & MMS conversations from device Telephony database and syncs full message histories
      * and thread IDs to Firebase Realtime Database.
      */
     fun syncAllSmsThreads(context: Context, onComplete: ((Int) -> Unit)? = null) {
@@ -158,7 +213,7 @@ object PushBridgeFirebaseManager {
             if (!isInitialized) initialize(context)
             val deviceId = getDeviceId(context)
             val threads = SmsRepository.queryConversationThreads(context)
-            Log.i(TAG, "Queried ${threads.size} SMS conversation threads for sync.")
+            Log.i(TAG, "Queried ${threads.size} SMS conversation threads for sync (including group threads).")
 
             val threadsRef = database?.getReference("devices")?.child(deviceId)?.child("sms_threads") ?: return@launch
 
@@ -179,7 +234,34 @@ object PushBridgeFirebaseManager {
     }
 
     /**
-     * Listens for inbound commands (REMOTE_REPLY, SEND_SMS) from Chrome client or relay in real time.
+     * Synchronizes local device phonebook contacts to Firebase so the Chrome extension
+     * can query them alongside Google Contacts.
+     */
+    fun syncDeviceContacts(context: Context) {
+        scope.launch {
+            if (!isInitialized) initialize(context)
+            val deviceId = getDeviceId(context)
+            val contacts = SmsRepository.queryDeviceContacts(context)
+            if (contacts.isEmpty()) return@launch
+
+            val contactsRef = database?.getReference("devices")?.child(deviceId)?.child("contacts") ?: return@launch
+            val contactsMap = mutableMapOf<String, Any?>()
+            contacts.forEach { item ->
+                contactsMap[item.cleanDigits] = item.toMap()
+            }
+
+            contactsRef.setValue(contactsMap)
+                .addOnSuccessListener {
+                    Log.i(TAG, "Successfully synced ${contacts.size} device contacts to Firebase.")
+                }
+                .addOnFailureListener { err ->
+                    Log.w(TAG, "Failed syncing device contacts: ${err.message}")
+                }
+        }
+    }
+
+    /**
+     * Listens for inbound commands (REMOTE_REPLY, SEND_SMS, SYNC_SMS_THREADS) from Chrome client.
      */
     fun startInboundCommandListener(context: Context) {
         val deviceId = getDeviceId(context)
@@ -247,45 +329,69 @@ object PushBridgeFirebaseManager {
                 val recipient = snapshot.child("recipient").getValue(String::class.java) ?: ""
                 val message = snapshot.child("message").getValue(String::class.java) ?: ""
                 val threadIdVal = snapshot.child("threadId").getValue(Long::class.java) ?: 0L
+                val isGroup = snapshot.child("isGroup").getValue(Boolean::class.java) ?: false
 
-                val smsResult = SmsManagerHelper.sendSms(context, recipient, message)
-                when (smsResult) {
-                    is SmsSendResult.Success -> {
+                // Extract recipient list for group broadcast
+                val recipientsSnap = snapshot.child("recipients")
+                val recipientsList = mutableListOf<String>()
+
+                if (recipientsSnap.exists()) {
+                    for (child in recipientsSnap.children) {
+                        val p = child.getValue(String::class.java) ?: ""
+                        if (p.isNotBlank()) recipientsList.add(p)
+                    }
+                }
+
+                if (recipientsList.isEmpty() && recipient.isNotBlank()) {
+                    recipientsList.addAll(recipient.split(",", ";").map { it.trim() }.filter { it.isNotBlank() })
+                }
+
+                if (isGroup || recipientsList.size > 1) {
+                    // Group Broadcast: iterate and send SMS to all participants
+                    var successCount = 0
+                    val failures = mutableListOf<String>()
+
+                    for (targetPhone in recipientsList) {
+                        val res = SmsManagerHelper.sendSms(context, targetPhone, message)
+                        if (res is SmsSendResult.Success) {
+                            successCount++
+                        } else if (res is SmsSendResult.Failure) {
+                            failures.add("$targetPhone (${res.error})")
+                        }
+                    }
+
+                    if (successCount > 0) {
                         updateCommandStatus(
                             snapshot.ref,
                             "completed",
-                            "SMS sent successfully (${smsResult.partsCount} parts)"
+                            "Group SMS broadcasted to $successCount of ${recipientsList.size} recipients"
                         )
 
-                        // Update thread message in Firebase Realtime Database
-                        val deviceId = getDeviceId(context)
-                        val msgId = "out_${System.currentTimeMillis()}"
-                        val targetThreadKey = if (threadIdVal > 0) threadIdVal.toString() else Math.abs(recipient.hashCode()).toString()
-
-                        val msgMap = mapOf(
-                            "id" to msgId,
-                            "threadId" to threadIdVal,
-                            "address" to recipient,
-                            "body" to message,
-                            "timestamp" to ServerValue.TIMESTAMP,
-                            "isIncoming" to false,
-                            "isRead" to true
+                        // Update thread message in Firebase
+                        recordSentMessageInThread(context, threadIdVal, recipient, message)
+                    } else {
+                        updateCommandStatus(
+                            snapshot.ref,
+                            "failed",
+                            "Failed broadcasting to group: ${failures.joinToString("; ")}"
                         )
-
-                        database?.getReference("devices")?.child(deviceId)?.child("sms_threads")
-                            ?.child(targetThreadKey)?.child("messages")?.child(msgId)?.setValue(msgMap)
-
-                        database?.getReference("devices")?.child(deviceId)?.child("sms_threads")
-                            ?.child(targetThreadKey)?.child("snippet")?.setValue(message)
-
-                        database?.getReference("devices")?.child(deviceId)?.child("sms_threads")
-                            ?.child(targetThreadKey)?.child("lastTimestamp")?.setValue(ServerValue.TIMESTAMP)
-
-                        // Also trigger asynchronous thread refresh
-                        syncAllSmsThreads(context)
                     }
-                    is SmsSendResult.Failure -> {
-                        updateCommandStatus(snapshot.ref, "failed", smsResult.error)
+                } else {
+                    // Single recipient SMS
+                    val singleRecipient = recipientsList.firstOrNull() ?: recipient
+                    val smsResult = SmsManagerHelper.sendSms(context, singleRecipient, message)
+                    when (smsResult) {
+                        is SmsSendResult.Success -> {
+                            updateCommandStatus(
+                                snapshot.ref,
+                                "completed",
+                                "SMS sent successfully (${smsResult.partsCount} parts)"
+                            )
+                            recordSentMessageInThread(context, threadIdVal, singleRecipient, message)
+                        }
+                        is SmsSendResult.Failure -> {
+                            updateCommandStatus(snapshot.ref, "failed", smsResult.error)
+                        }
                     }
                 }
             }
@@ -296,6 +402,11 @@ object PushBridgeFirebaseManager {
                 }
             }
 
+            "SYNC_CONTACTS" -> {
+                syncDeviceContacts(context)
+                updateCommandStatus(snapshot.ref, "completed", "Device contacts synced")
+            }
+
             "PING" -> {
                 updateCommandStatus(snapshot.ref, "completed", "Pong from Android device")
             }
@@ -304,6 +415,39 @@ object PushBridgeFirebaseManager {
                 updateCommandStatus(snapshot.ref, "failed", "Unknown command type: $type")
             }
         }
+    }
+
+    private fun recordSentMessageInThread(
+        context: Context,
+        threadIdVal: Long,
+        recipient: String,
+        message: String
+    ) {
+        val deviceId = getDeviceId(context)
+        val msgId = "out_${System.currentTimeMillis()}"
+        val targetThreadKey = if (threadIdVal > 0) threadIdVal.toString() else Math.abs(recipient.hashCode()).toString()
+
+        val msgMap = mapOf(
+            "id" to msgId,
+            "threadId" to threadIdVal,
+            "address" to recipient,
+            "body" to message,
+            "timestamp" to ServerValue.TIMESTAMP,
+            "isIncoming" to false,
+            "isRead" to true
+        )
+
+        database?.getReference("devices")?.child(deviceId)?.child("sms_threads")
+            ?.child(targetThreadKey)?.child("messages")?.child(msgId)?.setValue(msgMap)
+
+        database?.getReference("devices")?.child(deviceId)?.child("sms_threads")
+            ?.child(targetThreadKey)?.child("snippet")?.setValue(message)
+
+        database?.getReference("devices")?.child(deviceId)?.child("sms_threads")
+            ?.child(targetThreadKey)?.child("lastTimestamp")?.setValue(ServerValue.TIMESTAMP)
+
+        // Asynchronously refresh threads
+        syncAllSmsThreads(context)
     }
 
     private fun updateCommandStatus(ref: DatabaseReference, status: String, resultMessage: String) {

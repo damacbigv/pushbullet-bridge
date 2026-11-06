@@ -72,6 +72,9 @@ data class SmsConversationThread(
     val snippet: String = "",
     val lastTimestamp: Long = System.currentTimeMillis(),
     val unreadCount: Int = 0,
+    val isGroup: Boolean = false,
+    val groupTitle: String? = null,
+    val recipients: List<Map<String, String>> = emptyList(),
     val messages: Map<String, Any?> = emptyMap()
 ) {
     fun toMap(): Map<String, Any?> = mapOf(
@@ -81,7 +84,36 @@ data class SmsConversationThread(
         "snippet" to snippet,
         "lastTimestamp" to lastTimestamp,
         "unreadCount" to unreadCount,
+        "isGroup" to isGroup,
+        "groupTitle" to (groupTitle ?: ""),
+        "recipients" to recipients,
         "messages" to messages
+    )
+}
+
+data class DeviceContactItem(
+    val id: String = "",
+    val name: String = "",
+    val phone: String = "",
+    val cleanDigits: String = ""
+) {
+    fun toMap(): Map<String, Any?> = mapOf(
+        "id" to id,
+        "name" to name,
+        "phone" to phone,
+        "cleanDigits" to cleanDigits
+    )
+}
+
+data class DevicePresence(
+    val online: Boolean = true,
+    val lastHeartbeat: Long = System.currentTimeMillis(),
+    val deviceName: String = ""
+) {
+    fun toMap(): Map<String, Any?> = mapOf(
+        "online" to online,
+        "lastHeartbeat" to lastHeartbeat,
+        "deviceName" to deviceName
     )
 }
 
@@ -92,6 +124,8 @@ data class InboundCommand(
     val notificationKey: String? = null,
     val replyText: String? = null,
     val recipient: String? = null,
+    val isGroup: Boolean = false,
+    val recipients: List<String> = emptyList(),
     val message: String? = null,
     val timestamp: Long = System.currentTimeMillis(),
     val status: String = "pending",
