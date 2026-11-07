@@ -33,6 +33,7 @@ import com.example.pushbridge.data.PushBridgeFirebaseManager
 import com.example.pushbridge.model.DeviceRole
 import com.example.pushbridge.service.PushBridgeNotificationListenerService
 import com.example.pushbridge.theme.PushBridgeTheme
+import com.example.pushbridge.util.DateTimeUtils
 import com.example.pushbridge.util.PermissionUtils
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -158,6 +159,7 @@ fun MainScreen(
                             }
                         }
                     )
+                    ConversationThreadsPreviewCard(context)
                     DiagnosticsCard(context, testStatusText) { newStatus ->
                         testStatusText = newStatus
                     }
@@ -208,6 +210,7 @@ fun MainScreen(
                         }
                     }
                 )
+                ConversationThreadsPreviewCard(context)
                 DiagnosticsCard(context, testStatusText) { newStatus ->
                     testStatusText = newStatus
                 }
@@ -421,6 +424,115 @@ private fun SmsBridgeCard(
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6366F1))
             ) {
                 Text("Sync Device Contacts to Firebase")
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConversationThreadsPreviewCard(context: Context) {
+    var activeTooltip by remember { mutableStateOf<String?>(null) }
+
+    val sampleThreads = remember {
+        listOf(
+            Triple("Alice Cooper", "Are we still on for lunch today?", System.currentTimeMillis() - 1000 * 60 * 12),
+            Triple("Weekend Hike & BBQ (Group)", "Sarah: Sounds great, count me in!", System.currentTimeMillis() - 1000 * 60 * 5),
+            Triple("Bob Martinez", "The server deployment finished cleanly.", System.currentTimeMillis() - 1000 * 60 * 60 * 24 * 3)
+        )
+    }
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("SMS THREADS TIMESTAMP PREVIEW", style = MaterialTheme.typography.labelSmall, color = Color(0xFF0EA5E9))
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = Color(0xFF0EA5E9).copy(alpha = 0.2f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF0EA5E9))
+                ) {
+                    Text(
+                        "v3.0.1",
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF38BDF8)
+                    )
+                }
+            }
+            Text(
+                "Precision timestamps: Current calendar date shows time only; older dates display day of week, month, and year. Tap or hover over any timestamp to inspect full precision details.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+            )
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(8.dp))
+                    .padding(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                sampleThreads.forEachIndexed { index, (sender, snippet, timestamp) ->
+                    val timeInfo = DateTimeUtils.formatThreadTimestamp(timestamp)
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                activeTooltip = "$sender • ${timeInfo.fullTooltip}"
+                            }
+                            .padding(vertical = 4.dp, horizontal = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(sender, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            Text(snippet, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = Color(0xFF0EA5E9).copy(alpha = 0.12f),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF0EA5E9).copy(alpha = 0.3f))
+                        ) {
+                            Text(
+                                text = timeInfo.display,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Medium,
+                                color = Color(0xFF38BDF8)
+                            )
+                        }
+                    }
+                    if (index < sampleThreads.size - 1) {
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+                    }
+                }
+            }
+
+            activeTooltip?.let { hint ->
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = Color(0xFF0F172A),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.4f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "🕒 Full Timestamp: $hint",
+                        modifier = Modifier.padding(8.dp),
+                        fontSize = 11.sp,
+                        color = Color(0xFFBAE6FD)
+                    )
+                }
             }
         }
     }

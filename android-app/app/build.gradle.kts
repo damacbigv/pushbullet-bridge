@@ -11,8 +11,8 @@ android {
         applicationId = "com.example.pushbridge"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 301
+        versionName = "3.0.1"
     }
 
     buildTypes {

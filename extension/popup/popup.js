@@ -1115,7 +1115,7 @@ async function createThreadListItem(thread) {
     }
   }
 
-  const timeStr = formatTimestamp(thread.lastTimestamp);
+  const { display: timeStr, full: fullTimestampHint } = formatThreadListTimestamp(thread.lastTimestamp);
 
   // Apply real-time search keyword highlighting
   const renderedName = currentSearchQuery ? highlightKeywords(escapeHtml(displayName), currentSearchQuery) : escapeHtml(displayName);
@@ -1130,7 +1130,8 @@ async function createThreadListItem(thread) {
     <div class="flex-1 min-w-0">
       <div class="flex items-center justify-between mb-0.5">
         <h3 class="text-xs font-bold text-slate-100 truncate">${renderedName}</h3>
-        <span class="text-[10px] text-slate-500 shrink-0 ml-1">${timeStr}</span>
+        <span class="thread-timestamp-badge text-[10px] text-slate-400 hover:text-sky-300 font-mono shrink-0 ml-1 transition cursor-help border-b border-dotted border-slate-600/50"
+              title="${escapeHtml(fullTimestampHint)}">${escapeHtml(timeStr)}</span>
       </div>
       <div class="flex items-center justify-between">
         <p class="text-[11px] text-slate-400 truncate flex-1">${renderedSnippet}</p>
@@ -1601,6 +1602,47 @@ function formatTimestamp(ts) {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+/**
+ * Context-Aware Timestamp Formatting for SMS Thread Left-Hand Navigation Panel:
+ * 1. Current calendar date (today): Displays only the time (e.g., "3:42 PM" or "15:42").
+ * 2. Older than current date: Displays the day of the week combined with the month and year (e.g., "Wed, Nov 2026").
+ * 3. Interactive Hover Tooltip: Provides the full, precise timestamp (exact date, hour, minute, and second).
+ */
+function formatThreadListTimestamp(ts) {
+  if (!ts) return { display: '', full: '' };
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return { display: '', full: '' };
+
+  const now = new Date();
+  const isToday = d.getFullYear() === now.getFullYear() &&
+                  d.getMonth() === now.getMonth() &&
+                  d.getDate() === now.getDate();
+
+  let display = '';
+  if (isToday) {
+    // Current calendar date: display only the time based on user locale
+    display = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  } else {
+    // Older than current date: day of the week combined with month and year
+    const weekday = d.toLocaleDateString([], { weekday: 'short' });
+    const monthYear = d.toLocaleDateString([], { month: 'short', year: 'numeric' });
+    display = `${weekday}, ${monthYear}`;
+  }
+
+  // Full, precise timestamp for interactive hover tooltip hint
+  const full = d.toLocaleString([], {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+
+  return { display, full };
+}
+
 function formatBytes(bytes) {
   if (!bytes) return '0 B';
   const k = 1024;
@@ -1727,7 +1769,7 @@ function getFallbackSmsThreads() {
       address: '+1 (555) 876-5432',
       contactName: 'Bob Martinez',
       snippet: 'The server deployment finished cleanly.',
-      lastTimestamp: Date.now() - 1000 * 60 * 90,
+      lastTimestamp: Date.now() - 1000 * 60 * 60 * 24 * 3,
       unreadCount: 0,
       isGroup: false,
       recipients: [],
