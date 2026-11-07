@@ -1,20 +1,26 @@
-# PushBridge v2.5
+# PushBridge v2.5.1
 
 > **Self-Hosted Cross-Platform Notification Mirroring, Threaded SMS & Group Chat Bridge**  
 > A private, modular alternative to Pushbullet connecting Google Chrome, Android devices, and a fallback cloud sync relay using Firebase as the real-time synchronization backend.
 
-[![Download Android APK](https://img.shields.io/badge/Download_APK-v2.5.0_(16_MB)-10B981?style=for-the-badge&logo=android&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/download/v2.5.0/PushBridge-v2.5.0.apk)
-[![GitHub Release](https://img.shields.io/badge/GitHub_Release-v2.5.0-6366F1?style=for-the-badge&logo=github&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v2.5.0)
-[![Chrome Extension](https://img.shields.io/badge/Chrome_Extension-Manifest_V3_(v2.5.0)-0EA5E9?style=for-the-badge&logo=googlechrome&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/tree/main/extension)
+[![Download Android APK](https://img.shields.io/badge/Download_APK-v2.5.1_(16_MB)-10B981?style=for-the-badge&logo=android&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/download/v2.5.1/PushBridge-v2.5.1.apk)
+[![GitHub Release](https://img.shields.io/badge/GitHub_Release-v2.5.1-6366F1?style=for-the-badge&logo=github&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v2.5.1)
+[![Chrome Extension](https://img.shields.io/badge/Chrome_Extension-Manifest_V3_(v2.5.1)-0EA5E9?style=for-the-badge&logo=googlechrome&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/tree/main/extension)
 
-📥 **Release Page**: [GitHub Release v2.5.0](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v2.5.0)  
-📦 **Direct APK Download**: [PushBridge-v2.5.0.apk](https://github.com/damacbigv/pushbullet-bridge/releases/download/v2.5.0/PushBridge-v2.5.0.apk)
+📥 **Latest Release Page**: [GitHub Release v2.5.1](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v2.5.1)  
+📦 **Direct APK Download**: [PushBridge-v2.5.1.apk](https://github.com/damacbigv/pushbullet-bridge/releases/download/v2.5.1/PushBridge-v2.5.1.apk)
 
 ---
 
-## What's New in Version 2.5
+## What's New in Version 2.5.1
 
-1. **Contact Resolution & Identity Mapping in SMS Threads**:
+1. **Premature Disconnection & SSE Heartbeat Fix**:
+   - Fixed parsing of Firebase Realtime SSE subpath events (`devices/{deviceId}/presence/lastHeartbeat`), preventing 30-second heartbeat timestamps from being evaluated as falsy.
+   - Built-in 3-minute heartbeat freshness tolerance to gracefully absorb mobile network handoffs (Wi-Fi ↔ LTE) and Android Doze battery optimizations without triggering offline banners.
+   - Atomic Android heartbeat dispatch (`presenceRef.updateChildren`) with active presence refresh during SMS, MMS, and notification transmissions.
+   - Resolved device selector startup race condition in Chrome Extension popup.
+
+2. **Contact Resolution & Identity Mapping in SMS Threads**:
    - Cross-references incoming and existing phone numbers with Google Contacts and the local device telephony contact store.
    - Automatically resolves numbers to contact display names, photos, and initials in both the thread list and conversation bubbles.
    - Gracefully falls back to formatted readable telephone numbers (e.g. `+1 (555) 234-5678`) when unmapped.
