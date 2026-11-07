@@ -87,9 +87,12 @@ object PushBridgeFirebaseManager {
                 val connected = snapshot.getValue(Boolean::class.java) ?: false
                 if (connected) {
                     val deviceName = "${Build.MANUFACTURER} ${Build.MODEL}"
-                    presenceRef.child("online").setValue(true)
-                    presenceRef.child("lastHeartbeat").setValue(ServerValue.TIMESTAMP)
-                    presenceRef.child("deviceName").setValue(deviceName)
+                    val presenceMap = mapOf<String, Any>(
+                        "online" to true,
+                        "lastHeartbeat" to ServerValue.TIMESTAMP,
+                        "deviceName" to deviceName
+                    )
+                    presenceRef.updateChildren(presenceMap)
 
                     // On disconnect, mark offline and record disconnection timestamp
                     presenceRef.child("online").onDisconnect().setValue(false)
@@ -120,12 +123,32 @@ object PushBridgeFirebaseManager {
             while (isActive) {
                 delay(30_000L)
                 try {
-                    presenceRef?.child("lastHeartbeat")?.setValue(ServerValue.TIMESTAMP)
-                    presenceRef?.child("online")?.setValue(true)
+                    val heartbeatMap = mapOf<String, Any>(
+                        "online" to true,
+                        "lastHeartbeat" to ServerValue.TIMESTAMP
+                    )
+                    presenceRef?.updateChildren(heartbeatMap)
                 } catch (e: Exception) {
                     Log.d(TAG, "Heartbeat ping error: ${e.message}")
                 }
             }
+        }
+    }
+
+    /**
+     * Touches the presence heartbeat timestamp whenever device sends SMS, notifications, or syncs.
+     */
+    fun touchHeartbeat(context: Context) {
+        try {
+            val deviceId = getDeviceId(context)
+            val presenceRef = database?.getReference("devices")?.child(deviceId)?.child("presence")
+            val heartbeatMap = mapOf<String, Any>(
+                "online" to true,
+                "lastHeartbeat" to ServerValue.TIMESTAMP
+            )
+            presenceRef?.updateChildren(heartbeatMap)
+        } catch (e: Exception) {
+            Log.d(TAG, "touchHeartbeat error: ${e.message}")
         }
     }
 
@@ -174,6 +197,7 @@ object PushBridgeFirebaseManager {
             notifRef.setValue(payload.toMap())
                 .addOnSuccessListener {
                     Log.i(TAG, "Successfully synced notification '${payload.title}' from ${payload.appName} to Firebase")
+                    touchHeartbeat(context)
                 }
                 .addOnFailureListener { err ->
                     Log.e(TAG, "Failed pushing notification to Firebase: ${err.message}", err)
@@ -197,6 +221,7 @@ object PushBridgeFirebaseManager {
             smsRef.setValue(sms.toMap())
                 .addOnSuccessListener {
                     Log.i(TAG, "Successfully synced SMS from ${sms.sender} to Firebase")
+                    touchHeartbeat(context)
                 }
                 .addOnFailureListener { err ->
                     Log.e(TAG, "Failed syncing SMS to Firebase: ${err.message}", err)
@@ -225,6 +250,7 @@ object PushBridgeFirebaseManager {
             threadsRef.setValue(threadsMap)
                 .addOnSuccessListener {
                     Log.i(TAG, "Successfully synced ${threads.size} SMS threads to Firebase.")
+                    touchHeartbeat(context)
                     onComplete?.invoke(threads.size)
                 }
                 .addOnFailureListener { err ->
@@ -256,6 +282,7 @@ object PushBridgeFirebaseManager {
             contactsRef.setValue(contactsMap)
                 .addOnSuccessListener {
                     Log.i(TAG, "Successfully synced ${contacts.size} device contacts to Firebase.")
+                    touchHeartbeat(context)
                     onComplete?.invoke(contacts.size)
                 }
                 .addOnFailureListener { err ->

@@ -26,7 +26,6 @@ let composeAutocomplete = null;
 
 document.addEventListener('DOMContentLoaded', async () => {
   setupTabs();
-  setupDeviceSelector();
   setupGoogleContacts();
   setupNotificationViews();
   setupThreadedSms();
@@ -34,12 +33,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupWindowExpansion();
   setupGlobalEvents();
 
+  await setupDeviceSelector();
   await checkStreamStatus();
   await checkDevicePresence();
   await restoreSavedState();
   await loadNotifications();
   await loadSmsThreads();
   await loadClipboardState();
+
+  // Periodic heartbeat / presence verification poll every 15 seconds
+  setInterval(async () => {
+    await checkDevicePresence();
+  }, 15000);
 });
 
 // =============================================================
@@ -118,8 +123,8 @@ async function checkDevicePresence() {
     if (res && res.presence) {
       updatePresenceUI(res.presence);
     } else {
-      // Default optimistic presence
-      updatePresenceUI({ online: true, deviceName: 'Android Companion' });
+      // Default optimistic presence if device selector has an android device
+      updatePresenceUI({ online: true, deviceName: currentTargetDeviceId || 'Android Companion' });
     }
   } catch {
     updatePresenceUI({ online: false });
@@ -132,7 +137,11 @@ function updatePresenceUI(presence) {
   const text = document.getElementById('phone-presence-text');
   const offlineBanner = document.getElementById('phone-offline-banner');
 
-  const isOnline = presence && presence.online === true;
+  if (!badge || !dot || !text) return;
+
+  // Heartbeat freshness tolerance: within 3 minutes (180,000 ms)
+  const isFresh = presence?.lastHeartbeat && (Date.now() - presence.lastHeartbeat < 180000);
+  const isOnline = !!presence && (presence.online === true || isFresh);
   phoneIsOnline = isOnline;
 
   if (isOnline) {
@@ -161,6 +170,7 @@ async function setupDeviceSelector() {
       select.innerHTML = '<option value="android_companion">Android Phone (Auto)</option>';
       currentTargetDeviceId = 'android_companion';
     } else {
+      let matched = false;
       devices.forEach(devId => {
         const opt = document.createElement('option');
         opt.value = devId;
@@ -168,11 +178,16 @@ async function setupDeviceSelector() {
         if (devId === activeTargetDeviceId) {
           opt.selected = true;
           currentTargetDeviceId = devId;
+          matched = true;
         }
         select.appendChild(opt);
       });
-      if (!currentTargetDeviceId && devices.length > 0) {
-        currentTargetDeviceId = devices[0];
+      if (!matched && devices.length > 0) {
+        // Prioritize selecting an android companion device
+        const androidDev = devices.find(d => d.startsWith('android')) || devices[0];
+        select.value = androidDev;
+        currentTargetDeviceId = androidDev;
+        await chrome.storage.local.set({ activeTargetDeviceId: androidDev });
       }
     }
   } catch {
@@ -1256,7 +1271,9 @@ function setupGlobalEvents() {
     } else if (message.type === 'DEVICE_CONTACTS_UPDATED') {
       loadSmsThreads();
     } else if (message.type === 'DEVICE_PRESENCE_CHANGED') {
-      updatePresenceUI(message.presence);
+      if (!currentTargetDeviceId || message.deviceId === currentTargetDeviceId) {
+        updatePresenceUI(message.presence);
+      }
     } else if (message.type === 'CLIPBOARD_UPDATED') {
       loadClipboardState();
     }

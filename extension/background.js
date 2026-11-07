@@ -42,6 +42,17 @@ chrome.runtime.onInstalled.addListener(async () => {
   await startFirebaseStream();
 });
 
+// Re-establish stream on browser startup
+chrome.runtime.onStartup.addListener(async () => {
+  console.log('[PushBridge SW] Startup event triggered. Establishing Firebase stream...');
+  await startFirebaseStream();
+});
+
+// Ensure stream connects whenever service worker starts or wakes up
+startFirebaseStream().catch(err => {
+  console.warn('[PushBridge SW] Initial stream startup background attempt:', err.message);
+});
+
 // Periodic alarm handler for stream resilience
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === ALARM_STREAM_HEARTBEAT) {
@@ -133,7 +144,7 @@ async function processStreamData(eventType, rawData) {
 
     const path = payload.path || '';
     const data = payload.data;
-    if (!data) return;
+    if (data === undefined) return;
 
     // 1. Initial dump or root update
     if (path === '/') {
@@ -150,23 +161,31 @@ async function processStreamData(eventType, rawData) {
               await handleIncomingNotification(notif, devId, false); // don't alert old backlog
             }
           }
+          if (devData.sms_threads) {
+            await handleIncomingSmsThreads(devData.sms_threads, `/${devId}/sms_threads`, devId);
+          }
         }
       }
       return;
     }
 
-    // 2. Device Presence status update
+    // 2. Device Presence status update (e.g. /android_xxx/presence, /android_xxx/presence/lastHeartbeat, /android_xxx/presence/online)
     if (path.includes('/presence')) {
       const parts = path.split('/').filter(Boolean);
-      const devId = parts[0];
-      await handleDevicePresenceUpdate(data, devId);
+      const presenceIdx = parts.indexOf('presence');
+      if (presenceIdx > 0) {
+        const devId = parts[presenceIdx - 1];
+        const subField = parts.length > presenceIdx + 1 ? parts[presenceIdx + 1] : undefined;
+        await handleDevicePresenceUpdate(data, devId, subField);
+      }
       return;
     }
 
     // 3. Local phonebook contacts synced from Android device
     if (path.includes('/contacts')) {
       const parts = path.split('/').filter(Boolean);
-      const devId = parts[0];
+      const idx = parts.indexOf('contacts');
+      const devId = idx > 0 ? parts[idx - 1] : parts[0];
       await handleIncomingDeviceContacts(data, devId);
       return;
     }
@@ -174,7 +193,8 @@ async function processStreamData(eventType, rawData) {
     // 4. Outbound notifications from an Android device
     if (path.includes('/outbound_notifications')) {
       const parts = path.split('/').filter(Boolean);
-      const devId = parts[0];
+      const idx = parts.indexOf('outbound_notifications');
+      const devId = idx > 0 ? parts[idx - 1] : parts[0];
       await handleIncomingNotification(data, devId, true);
       return;
     }
@@ -182,7 +202,8 @@ async function processStreamData(eventType, rawData) {
     // 5. Outbound SMS from an Android device
     if (path.includes('/outbound_sms')) {
       const parts = path.split('/').filter(Boolean);
-      const devId = parts[0];
+      const idx = parts.indexOf('outbound_sms');
+      const devId = idx > 0 ? parts[idx - 1] : parts[0];
       await handleIncomingSms(data, devId, true);
       return;
     }
@@ -190,7 +211,8 @@ async function processStreamData(eventType, rawData) {
     // 6. Clipboard sync node
     if (path.includes('/clipboard')) {
       const parts = path.split('/').filter(Boolean);
-      const devId = parts[0];
+      const idx = parts.indexOf('clipboard');
+      const devId = idx > 0 ? parts[idx - 1] : parts[0];
       await handleIncomingClipboard(data, devId);
       return;
     }
@@ -198,7 +220,8 @@ async function processStreamData(eventType, rawData) {
     // 7. Threaded SMS conversations from Android device
     if (path.includes('/sms_threads')) {
       const parts = path.split('/').filter(Boolean);
-      const devId = parts[0];
+      const idx = parts.indexOf('sms_threads');
+      const devId = idx > 0 ? parts[idx - 1] : parts[0];
       await handleIncomingSmsThreads(data, path, devId);
       return;
     }
@@ -350,32 +373,66 @@ async function handleIncomingSmsThreads(data, path, sourceDeviceId) {
 /**
  * Handles device presence state updates from Firebase RTDB.
  * Automatically triggers background sync when phone is detected online.
+ * Tolerates transient network handoffs and correctly parses subfield SSE events.
+ * 
+ * @param {any} presence The new presence data or sub-field value
+ * @param {string} devId The device identifier (e.g. android_d016a935)
+ * @param {string} [subField] Optional subfield if the path was /presence/{subField}
  */
-async function handleDevicePresenceUpdate(presence, devId) {
-  if (!presence) return;
-
-  const isOnline = typeof presence === 'object' ? presence.online === true : presence === true;
-  const heartbeat = typeof presence === 'object' ? (presence.lastHeartbeat || Date.now()) : Date.now();
-  const deviceName = typeof presence === 'object' ? (presence.deviceName || devId) : devId;
+async function handleDevicePresenceUpdate(presence, devId, subField) {
+  if (presence === undefined || !devId) return;
 
   const { devicePresenceMap = {}, activeTargetDeviceId } = await chrome.storage.local.get([
     'devicePresenceMap',
     'activeTargetDeviceId'
   ]);
 
-  const prevPresence = devicePresenceMap[devId];
-  const wasOnline = prevPresence?.online === true;
+  const prevPresence = devicePresenceMap[devId] || {};
+  const wasOnline = prevPresence.online === true;
 
-  const updatedPresence = {
-    online: isOnline,
-    lastHeartbeat: heartbeat,
-    deviceName: deviceName,
-    updatedAt: Date.now()
-  };
+  let mergedPresence = { ...prevPresence };
+
+  if (subField === 'lastHeartbeat') {
+    const hb = Number(presence) || Date.now();
+    mergedPresence.lastHeartbeat = hb;
+    // An active heartbeat timestamp directly proves the device is alive and connected
+    mergedPresence.online = true;
+  } else if (subField === 'online') {
+    const isExplicitOnline = presence === true;
+    const isFresh = mergedPresence.lastHeartbeat && (Date.now() - mergedPresence.lastHeartbeat < 180000);
+    // Tolerate brief network handoffs if last heartbeat was recent (< 3 min)
+    mergedPresence.online = isExplicitOnline || isFresh;
+  } else if (subField === 'deviceName') {
+    mergedPresence.deviceName = String(presence);
+  } else if (typeof presence === 'object' && presence !== null) {
+    mergedPresence = {
+      ...mergedPresence,
+      ...presence
+    };
+    const isFresh = mergedPresence.lastHeartbeat && (Date.now() - mergedPresence.lastHeartbeat < 180000);
+    mergedPresence.online = (presence.online === true) || isFresh;
+  } else if (typeof presence === 'boolean') {
+    const isFresh = mergedPresence.lastHeartbeat && (Date.now() - mergedPresence.lastHeartbeat < 180000);
+    mergedPresence.online = presence || isFresh;
+  } else if (typeof presence === 'number') {
+    mergedPresence.lastHeartbeat = presence;
+    mergedPresence.online = true;
+  }
+
+  // Ensure default device name fallback
+  if (!mergedPresence.deviceName) {
+    mergedPresence.deviceName = devId.startsWith('android') ? 'Android Phone' : devId;
+  }
+  if (!mergedPresence.lastHeartbeat) {
+    mergedPresence.lastHeartbeat = Date.now();
+  }
+  mergedPresence.updatedAt = Date.now();
+
+  const isOnline = mergedPresence.online === true;
 
   const updatedMap = {
     ...devicePresenceMap,
-    [devId]: updatedPresence
+    [devId]: mergedPresence
   };
 
   const toSet = {
@@ -388,13 +445,13 @@ async function handleDevicePresenceUpdate(presence, devId) {
 
   await chrome.storage.local.set(toSet);
 
-  console.log(`[PushBridge SW] Presence update: ${devId} is ${isOnline ? 'ONLINE' : 'OFFLINE'}`);
+  console.log(`[PushBridge SW] Presence update: ${devId} is ${isOnline ? 'ONLINE' : 'OFFLINE'} (heartbeat: ${mergedPresence.lastHeartbeat})`);
 
   // Broadcast presence change to popup UI
   chrome.runtime.sendMessage({
     type: 'DEVICE_PRESENCE_CHANGED',
     deviceId: devId,
-    presence: updatedPresence
+    presence: mergedPresence
   }).catch(() => {});
 
   // AUTOMATIC BACKGROUND SYNC:
@@ -679,8 +736,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         case 'GET_DEVICE_PRESENCE': {
           const { targetDeviceId } = message;
-          const { devicePresenceMap = {} } = await chrome.storage.local.get('devicePresenceMap');
-          const presence = targetDeviceId ? devicePresenceMap[targetDeviceId] : null;
+          const { devicePresenceMap = {}, activeTargetDeviceId } = await chrome.storage.local.get([
+            'devicePresenceMap',
+            'activeTargetDeviceId'
+          ]);
+
+          const devId = targetDeviceId || activeTargetDeviceId;
+          let presence = devId ? devicePresenceMap[devId] : null;
+
+          // If no specific presence found for target devId, check if any android device exists in devicePresenceMap
+          if (!presence && Object.keys(devicePresenceMap).length > 0) {
+            const androidDev = Object.entries(devicePresenceMap)
+              .filter(([k]) => k.startsWith('android'))
+              .sort((a, b) => (b[1]?.lastHeartbeat || 0) - (a[1]?.lastHeartbeat || 0))[0];
+            if (androidDev) {
+              presence = androidDev[1];
+            }
+          }
+
+          if (presence) {
+            const isFresh = presence.lastHeartbeat && (Date.now() - presence.lastHeartbeat < 180000);
+            const isOnline = presence.online === true || isFresh;
+            presence = {
+              ...presence,
+              online: !!isOnline
+            };
+          }
+
           sendResponse({ success: true, presence, devicePresenceMap });
           break;
         }
