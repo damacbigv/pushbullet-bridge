@@ -1,9 +1,11 @@
 package com.example.pushbridge.data
 
 import android.content.Context
+import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.os.Build
 import android.util.Log
-import com.example.pushbridge.model.InboundCommand
+import com.example.pushbridge.model.DeviceRole
 import com.example.pushbridge.model.NotificationPayload
 import com.example.pushbridge.model.SmsPayload
 import com.example.pushbridge.util.NotificationReplyRegistry
@@ -34,6 +36,28 @@ object PushBridgeFirebaseManager {
     private var inboundRef: DatabaseReference? = null
     private var heartbeatJob: Job? = null
 
+    // Multi-device tablet peer listeners
+    private var tabletPeerThreadsListener: ValueEventListener? = null
+    private var tabletPeerNotifsListener: ChildEventListener? = null
+    var activePrimaryPhoneId: String? = null
+        private set
+
+    // Thread Pagination Limit (30, 50, or 100)
+    var currentPaginationLimit: Int = 30
+
+    /**
+     * Detects whether the current device is a Primary Telephony Phone or a Wi-Fi Tablet Companion.
+     */
+    fun getDeviceRole(context: Context): DeviceRole {
+        val hasTelephony = context.packageManager.hasSystemFeature(PackageManager.FEATURE_TELEPHONY)
+        val isLargeScreen = (context.resources.configuration.screenLayout and Configuration.SCREENLAYOUT_SIZE_MASK) >= Configuration.SCREENLAYOUT_SIZE_LARGE
+        return if (!hasTelephony || isLargeScreen) {
+            DeviceRole.WIFI_TABLET
+        } else {
+            DeviceRole.PRIMARY_PHONE
+        }
+    }
+
     /**
      * Initializes the Firebase Android SDK programmatically using provided configuration credentials.
      */
@@ -59,15 +83,21 @@ object PushBridgeFirebaseManager {
             try {
                 database?.setPersistenceEnabled(true)
             } catch (_: Exception) {
-                // Ignore if already set
+                // Ignore if already enabled
             }
 
             isInitialized = true
-            Log.i(TAG, "Firebase initialized successfully for project: $FIREBASE_PROJECT_ID")
+            val role = getDeviceRole(context)
+            Log.i(TAG, "Firebase initialized for project: $FIREBASE_PROJECT_ID (Device Role: $role)")
 
             registerDeviceState(context)
             setupPresence(context)
-            startInboundCommandListener(context)
+
+            if (role == DeviceRole.PRIMARY_PHONE) {
+                startInboundCommandListener(context)
+            } else {
+                startTabletPeerSync(context)
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error initializing Firebase: ${e.message}", e)
         }
@@ -79,6 +109,7 @@ object PushBridgeFirebaseManager {
      */
     fun setupPresence(context: Context) {
         val deviceId = getDeviceId(context)
+        val role = getDeviceRole(context)
         val connectedRef = database?.getReference(".info/connected") ?: return
         val presenceRef = database?.getReference("devices")?.child(deviceId)?.child("presence") ?: return
 
@@ -86,11 +117,18 @@ object PushBridgeFirebaseManager {
             override fun onDataChange(snapshot: DataSnapshot) {
                 val connected = snapshot.getValue(Boolean::class.java) ?: false
                 if (connected) {
-                    val deviceName = "${Build.MANUFACTURER} ${Build.MODEL}"
+                    val deviceName = if (role == DeviceRole.WIFI_TABLET) {
+                        "${Build.MANUFACTURER} ${Build.MODEL} (Tablet Companion)"
+                    } else {
+                        "${Build.MANUFACTURER} ${Build.MODEL}"
+                    }
                     val presenceMap = mapOf<String, Any>(
                         "online" to true,
                         "lastHeartbeat" to ServerValue.TIMESTAMP,
-                        "deviceName" to deviceName
+                        "deviceName" to deviceName,
+                        "deviceRole" to role.name,
+                        "deviceType" to if (role == DeviceRole.WIFI_TABLET) "tablet" else "phone",
+                        "paginationLimit" to currentPaginationLimit
                     )
                     presenceRef.updateChildren(presenceMap)
 
@@ -98,11 +136,13 @@ object PushBridgeFirebaseManager {
                     presenceRef.child("online").onDisconnect().setValue(false)
                     presenceRef.child("lastHeartbeat").onDisconnect().setValue(ServerValue.TIMESTAMP)
 
-                    Log.i(TAG, "Presence active: device $deviceId is ONLINE")
+                    Log.i(TAG, "Presence active: device $deviceId ($role) is ONLINE")
 
-                    // Synchronize threads and contacts automatically on connect
-                    syncAllSmsThreads(context)
-                    syncDeviceContacts(context)
+                    // Synchronize threads and contacts automatically on phone connect
+                    if (role == DeviceRole.PRIMARY_PHONE) {
+                        syncAllSmsThreads(context, currentPaginationLimit)
+                        syncDeviceContacts(context)
+                    }
                 }
             }
 
@@ -157,22 +197,28 @@ object PushBridgeFirebaseManager {
      */
     fun registerDeviceState(context: Context) {
         val deviceId = getDeviceId(context)
+        val role = getDeviceRole(context)
         val deviceRef = database?.getReference("devices")?.child(deviceId)?.child("info") ?: return
 
         val deviceInfo = mapOf(
             "deviceId" to deviceId,
+            "deviceRole" to role.name,
+            "deviceType" to if (role == DeviceRole.WIFI_TABLET) "tablet" else "phone",
+            "isTablet" to (role == DeviceRole.WIFI_TABLET),
             "manufacturer" to Build.MANUFACTURER,
             "model" to Build.MODEL,
             "sdk" to Build.VERSION.SDK_INT,
+            "hasTelephony" to context.packageManager.hasSystemFeature(PackageManager.FEATURE_TELEPHONY),
             "hasNotificationAccess" to PermissionUtils.hasNotificationAccess(context),
             "hasSmsSendPermission" to PermissionUtils.hasSmsSendPermission(context),
             "hasSmsReadPermission" to PermissionUtils.hasSmsReadPermission(context),
             "hasContactsReadPermission" to PermissionUtils.hasContactsReadPermission(context),
+            "paginationLimit" to currentPaginationLimit,
             "lastSeen" to ServerValue.TIMESTAMP
         )
 
         deviceRef.setValue(deviceInfo)
-            .addOnSuccessListener { Log.d(TAG, "Device state registered in Firebase") }
+            .addOnSuccessListener { Log.d(TAG, "Device state registered in Firebase for $deviceId") }
             .addOnFailureListener { e -> Log.w(TAG, "Failed to register device state: ${e.message}") }
     }
 
@@ -230,15 +276,20 @@ object PushBridgeFirebaseManager {
     }
 
     /**
-     * Reads SMS & MMS conversations from device Telephony database and syncs full message histories
-     * and thread IDs to Firebase Realtime Database.
+     * Reads SMS & MMS conversations with scalable pagination (30, 50, 100 threads)
+     * and syncs message histories to Firebase Realtime Database.
      */
-    fun syncAllSmsThreads(context: Context, onComplete: ((Int) -> Unit)? = null) {
+    fun syncAllSmsThreads(
+        context: Context,
+        limit: Int = currentPaginationLimit,
+        onComplete: ((Int) -> Unit)? = null
+    ) {
+        currentPaginationLimit = limit
         scope.launch {
             if (!isInitialized) initialize(context)
             val deviceId = getDeviceId(context)
-            val threads = SmsRepository.queryConversationThreads(context)
-            Log.i(TAG, "Queried ${threads.size} SMS conversation threads for sync (including group threads).")
+            val threads = SmsRepository.queryConversationThreads(context, maxThreads = limit)
+            Log.i(TAG, "Queried ${threads.size} SMS conversation threads (limit: $limit) for sync (including group threads).")
 
             val threadsRef = database?.getReference("devices")?.child(deviceId)?.child("sms_threads") ?: return@launch
 
@@ -249,7 +300,7 @@ object PushBridgeFirebaseManager {
 
             threadsRef.setValue(threadsMap)
                 .addOnSuccessListener {
-                    Log.i(TAG, "Successfully synced ${threads.size} SMS threads to Firebase.")
+                    Log.i(TAG, "Successfully synced ${threads.size} SMS threads (limit $limit) to Firebase.")
                     touchHeartbeat(context)
                     onComplete?.invoke(threads.size)
                 }
@@ -261,7 +312,7 @@ object PushBridgeFirebaseManager {
 
     /**
      * Synchronizes local device phonebook contacts to Firebase so the Chrome extension
-     * can query them alongside Google Contacts.
+     * and tablet can query them alongside Google Contacts.
      */
     fun syncDeviceContacts(context: Context, onComplete: ((Int) -> Unit)? = null) {
         scope.launch {
@@ -292,11 +343,11 @@ object PushBridgeFirebaseManager {
     }
 
     /**
-     * Listens for inbound commands (REMOTE_REPLY, SEND_SMS, SYNC_SMS_THREADS) from Chrome client.
+     * Listens for inbound commands dispatched by Chrome Extension or Wi-Fi Tablet.
      */
-    fun startInboundCommandListener(context: Context) {
+    private fun startInboundCommandListener(context: Context) {
         val deviceId = getDeviceId(context)
-        if (inboundRef != null) return // Already listening
+        if (inboundListener != null) return
 
         inboundRef = database?.getReference("devices")?.child(deviceId)?.child("inbound_commands")
         inboundListener = object : ChildEventListener {
@@ -361,6 +412,7 @@ object PushBridgeFirebaseManager {
                 val message = snapshot.child("message").getValue(String::class.java) ?: ""
                 val threadIdVal = snapshot.child("threadId").getValue(Long::class.java) ?: 0L
                 val isGroup = snapshot.child("isGroup").getValue(Boolean::class.java) ?: false
+                val attachmentData = snapshot.child("attachment").getValue(String::class.java)
 
                 // Extract recipient list for group broadcast
                 val recipientsSnap = snapshot.child("recipients")
@@ -378,7 +430,7 @@ object PushBridgeFirebaseManager {
                 }
 
                 if (isGroup || recipientsList.size > 1) {
-                    // Group Broadcast: iterate and send SMS to all participants
+                    // True Group Broadcast: iterate and dispatch to all participants simultaneously
                     var successCount = 0
                     val failures = mutableListOf<String>()
 
@@ -398,8 +450,16 @@ object PushBridgeFirebaseManager {
                             "Group SMS broadcasted to $successCount of ${recipientsList.size} recipients"
                         )
 
-                        // Update thread message in Firebase
-                        recordSentMessageInThread(context, threadIdVal, recipient, message)
+                        // Update unified group thread message in Firebase
+                        recordSentMessageInThread(
+                            context = context,
+                            threadIdVal = threadIdVal,
+                            recipient = recipient,
+                            message = message,
+                            isGroup = true,
+                            recipientsList = recipientsList,
+                            attachmentData = attachmentData
+                        )
                     } else {
                         updateCommandStatus(
                             snapshot.ref,
@@ -418,7 +478,14 @@ object PushBridgeFirebaseManager {
                                 "completed",
                                 "SMS sent successfully (${smsResult.partsCount} parts)"
                             )
-                            recordSentMessageInThread(context, threadIdVal, singleRecipient, message)
+                            recordSentMessageInThread(
+                                context = context,
+                                threadIdVal = threadIdVal,
+                                recipient = singleRecipient,
+                                message = message,
+                                isGroup = false,
+                                attachmentData = attachmentData
+                            )
                         }
                         is SmsSendResult.Failure -> {
                             updateCommandStatus(snapshot.ref, "failed", smsResult.error)
@@ -428,8 +495,9 @@ object PushBridgeFirebaseManager {
             }
 
             "SYNC_SMS_THREADS" -> {
-                syncAllSmsThreads(context) { count ->
-                    updateCommandStatus(snapshot.ref, "completed", "Synced $count SMS threads to Firebase")
+                val limit = snapshot.child("limit").getValue(Int::class.java) ?: currentPaginationLimit
+                syncAllSmsThreads(context, limit = limit) { count ->
+                    updateCommandStatus(snapshot.ref, "completed", "Synced $count SMS threads (limit $limit) to Firebase")
                 }
             }
 
@@ -452,13 +520,16 @@ object PushBridgeFirebaseManager {
         context: Context,
         threadIdVal: Long,
         recipient: String,
-        message: String
+        message: String,
+        isGroup: Boolean = false,
+        recipientsList: List<String> = emptyList(),
+        attachmentData: String? = null
     ) {
         val deviceId = getDeviceId(context)
         val msgId = "out_${System.currentTimeMillis()}"
         val targetThreadKey = if (threadIdVal > 0) threadIdVal.toString() else Math.abs(recipient.hashCode()).toString()
 
-        val msgMap = mapOf(
+        val msgMap = mutableMapOf<String, Any?>(
             "id" to msgId,
             "threadId" to threadIdVal,
             "address" to recipient,
@@ -468,17 +539,197 @@ object PushBridgeFirebaseManager {
             "isRead" to true
         )
 
-        database?.getReference("devices")?.child(deviceId)?.child("sms_threads")
-            ?.child(targetThreadKey)?.child("messages")?.child(msgId)?.setValue(msgMap)
+        if (!attachmentData.isNullOrBlank()) {
+            msgMap["attachmentData"] = attachmentData
+            msgMap["attachmentMime"] = "image/jpeg"
+        }
 
-        database?.getReference("devices")?.child(deviceId)?.child("sms_threads")
-            ?.child(targetThreadKey)?.child("snippet")?.setValue(message)
+        val threadRef = database?.getReference("devices")?.child(deviceId)?.child("sms_threads")?.child(targetThreadKey)
+        threadRef?.child("messages")?.child(msgId)?.setValue(msgMap)
+        threadRef?.child("snippet")?.setValue(if (message.isNotBlank()) message else "[Photo]")
+        threadRef?.child("lastTimestamp")?.setValue(ServerValue.TIMESTAMP)
 
-        database?.getReference("devices")?.child(deviceId)?.child("sms_threads")
-            ?.child(targetThreadKey)?.child("lastTimestamp")?.setValue(ServerValue.TIMESTAMP)
+        if (isGroup) {
+            threadRef?.child("isGroup")?.setValue(true)
+            if (recipientsList.isNotEmpty()) {
+                val formattedRecips = recipientsList.map { p ->
+                    mapOf("phone" to p, "name" to p, "cleanDigits" to p.replace(Regex("\\D"), ""))
+                }
+                threadRef?.child("recipients")?.setValue(formattedRecips)
+            }
+        }
 
         // Asynchronously refresh threads
-        syncAllSmsThreads(context)
+        syncAllSmsThreads(context, currentPaginationLimit)
+    }
+
+    // =========================================================================
+    // MULTI-DEVICE WI-FI TABLET COMPANION PEER-SYNC
+    // =========================================================================
+
+    /**
+     * Wi-Fi Tablet Peer-Sync: Listens to the primary phone's threads and notifications,
+     * maintaining a full synchronized state on the tablet.
+     */
+    fun startTabletPeerSync(
+        context: Context,
+        onThreadsUpdated: ((Map<String, Any?>) -> Unit)? = null,
+        onNotificationReceived: ((NotificationPayload) -> Unit)? = null
+    ) {
+        val devicesRef = database?.getReference("devices") ?: return
+
+        devicesRef.addListenerForSingleValueEvent(object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                // Find primary phone (starts with "android_" and is not our tablet)
+                val currentTabletId = getDeviceId(context)
+                for (child in snapshot.children) {
+                    val devId = child.key ?: continue
+                    if (devId.startsWith("android_") && devId != currentTabletId) {
+                        activePrimaryPhoneId = devId
+                        Log.i(TAG, "Tablet Companion paired with Primary Phone: $devId")
+                        attachTabletListeners(context, devId, onThreadsUpdated, onNotificationReceived)
+                        break
+                    }
+                }
+            }
+
+            override fun onCancelled(error: DatabaseError) {
+                Log.w(TAG, "Failed discovering primary phone for tablet peer-sync: ${error.message}")
+            }
+        })
+    }
+
+    private fun attachTabletListeners(
+        context: Context,
+        phoneId: String,
+        onThreadsUpdated: ((Map<String, Any?>) -> Unit)?,
+        onNotificationReceived: ((NotificationPayload) -> Unit)?
+    ) {
+        val phoneRef = database?.getReference("devices")?.child(phoneId) ?: return
+
+        // 1. Observe SMS threads from primary phone
+        tabletPeerThreadsListener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                val threadsMap = mutableMapOf<String, Any?>()
+                for (child in snapshot.children) {
+                    threadsMap[child.key ?: ""] = child.value
+                }
+                Log.i(TAG, "Tablet Companion received ${threadsMap.size} synced threads from phone $phoneId")
+                onThreadsUpdated?.invoke(threadsMap)
+            }
+
+            override fun onCancelled(error: DatabaseError) {
+                Log.w(TAG, "Tablet threads listener cancelled: ${error.message}")
+            }
+        }
+        phoneRef.child("sms_threads").addValueEventListener(tabletPeerThreadsListener as ValueEventListener)
+
+        // 2. Observe Outbound Notifications from primary phone
+        tabletPeerNotifsListener = object : ChildEventListener {
+            override fun onChildAdded(snapshot: DataSnapshot, previousChildName: String?) {
+                val notif = parseNotificationSnapshot(snapshot)
+                if (notif != null) {
+                    Log.i(TAG, "Tablet Companion mirrored notification from phone: ${notif.title}")
+                    onNotificationReceived?.invoke(notif)
+                }
+            }
+
+            override fun onChildChanged(snapshot: DataSnapshot, previousChildName: String?) {}
+            override fun onChildRemoved(snapshot: DataSnapshot) {}
+            override fun onChildMoved(snapshot: DataSnapshot, previousChildName: String?) {}
+            override fun onCancelled(error: DatabaseError) {}
+        }
+        phoneRef.child("outbound_notifications").addChildEventListener(tabletPeerNotifsListener as ChildEventListener)
+    }
+
+    private fun parseNotificationSnapshot(snapshot: DataSnapshot): NotificationPayload? {
+        val id = snapshot.child("id").getValue(String::class.java) ?: snapshot.key ?: return null
+        val title = snapshot.child("title").getValue(String::class.java) ?: ""
+        val text = snapshot.child("text").getValue(String::class.java) ?: ""
+        val appName = snapshot.child("appName").getValue(String::class.java) ?: "App"
+        val packageName = snapshot.child("packageName").getValue(String::class.java) ?: ""
+        val notificationKey = snapshot.child("notificationKey").getValue(String::class.java) ?: id
+        val canReply = snapshot.child("canReply").getValue(Boolean::class.java) ?: false
+        val timestamp = snapshot.child("timestamp").getValue(Long::class.java) ?: System.currentTimeMillis()
+
+        return NotificationPayload(
+            id = id,
+            notificationKey = notificationKey,
+            packageName = packageName,
+            appName = appName,
+            title = title,
+            text = text,
+            canReply = canReply,
+            timestamp = timestamp
+        )
+    }
+
+    /**
+     * Dispatches an SMS command from the Wi-Fi Tablet companion to the Primary Phone's inbound queue.
+     */
+    fun sendTabletSmsCommand(
+        context: Context,
+        targetPhoneId: String,
+        recipient: String,
+        messageBody: String,
+        isGroup: Boolean = false,
+        recipients: List<String> = emptyList(),
+        threadId: Long = 0L,
+        attachmentData: String? = null,
+        onComplete: ((Boolean) -> Unit)? = null
+    ) {
+        val tabletId = getDeviceId(context)
+        val commandRef = database?.getReference("devices")?.child(targetPhoneId)?.child("inbound_commands")?.push() ?: return
+
+        val payload = mapOf(
+            "type" to "SEND_SMS",
+            "sourceDeviceId" to tabletId,
+            "recipient" to recipient,
+            "message" to messageBody,
+            "isGroup" to isGroup,
+            "recipients" to recipients,
+            "threadId" to threadId,
+            "attachment" to (attachmentData ?: ""),
+            "timestamp" to ServerValue.TIMESTAMP,
+            "status" to "pending"
+        )
+
+        commandRef.setValue(payload)
+            .addOnSuccessListener {
+                Log.i(TAG, "Tablet queued outbound SMS to primary phone $targetPhoneId")
+                onComplete?.invoke(true)
+            }
+            .addOnFailureListener { err ->
+                Log.e(TAG, "Failed queuing tablet SMS command: ${err.message}")
+                onComplete?.invoke(false)
+            }
+    }
+
+    /**
+     * Dispatches a remote notification reply from the Wi-Fi Tablet to the Primary Phone.
+     */
+    fun sendTabletRemoteReply(
+        context: Context,
+        targetPhoneId: String,
+        notificationKey: String,
+        replyText: String,
+        onComplete: ((Boolean) -> Unit)? = null
+    ) {
+        val tabletId = getDeviceId(context)
+        val commandRef = database?.getReference("devices")?.child(targetPhoneId)?.child("inbound_commands")?.push() ?: return
+
+        val payload = mapOf(
+            "type" to "REMOTE_REPLY",
+            "sourceDeviceId" to tabletId,
+            "notificationKey" to notificationKey,
+            "replyText" to replyText,
+            "timestamp" to ServerValue.TIMESTAMP,
+            "status" to "pending"
+        )
+
+        commandRef.setValue(payload)
+            .addOnSuccessListener { onComplete?.invoke(true) }
+            .addOnFailureListener { onComplete?.invoke(false) }
     }
 
     private fun updateCommandStatus(ref: DatabaseReference, status: String, resultMessage: String) {
@@ -494,7 +745,9 @@ object PushBridgeFirebaseManager {
         val prefs = context.getSharedPreferences("pushbridge_prefs", Context.MODE_PRIVATE)
         var id = prefs.getString("device_id", null)
         if (id == null) {
-            id = "android_" + UUID.randomUUID().toString().substring(0, 8)
+            val role = getDeviceRole(context)
+            val prefix = if (role == DeviceRole.WIFI_TABLET) "tablet_" else "android_"
+            id = prefix + UUID.randomUUID().toString().substring(0, 8)
             prefs.edit().putString("device_id", id).apply()
         }
         return id

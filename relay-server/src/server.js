@@ -1,6 +1,7 @@
 /**
- * PushBridge Relay Server
- * Lightweight Express service utilizing Firebase Admin SDK for fallback cloud sync
+ * PushBridge Relay Server v3.0
+ * Lightweight Express service utilizing Firebase Admin SDK for fallback cloud sync,
+ * URL OpenGraph link preview extraction, and Multi-Device peer-sync routing.
  */
 import express from 'express';
 import cors from 'cors';
@@ -8,6 +9,7 @@ import morgan from 'morgan';
 import dotenv from 'dotenv';
 import syncRoutes from './routes/sync.js';
 import deviceRoutes from './routes/devices.js';
+import previewRoutes from './routes/preview.js';
 import { isFirebaseInitialized, projectId } from './config/firebase.js';
 
 dotenv.config();
@@ -17,18 +19,20 @@ const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 app.use(morgan('dev'));
 
 // Routes
 app.use('/api/sync', syncRoutes);
 app.use('/api/devices', deviceRoutes);
+app.use('/api/link-preview', previewRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
     service: 'pushbridge-relay-server',
+    version: '3.0.0',
     timestamp: new Date().toISOString(),
     firebase: {
       projectId,
@@ -41,12 +45,13 @@ app.get('/health', (req, res) => {
 app.get('/', (req, res) => {
   res.json({
     name: 'PushBridge Relay Server',
-    description: 'Cloud sync & device pairing bridge for Chrome Extension & Android companion app',
-    version: '1.0.0',
+    description: 'Cloud sync, multi-device peer pairing & link preview extraction for Chrome Extension, Android Tablet & Phone',
+    version: '3.0.0',
     health: '/health',
     endpoints: {
       sync: '/api/sync',
-      devices: '/api/devices'
+      devices: '/api/devices',
+      linkPreview: '/api/link-preview'
     }
   });
 });
@@ -62,7 +67,7 @@ app.use((err, req, res, next) => {
 
 app.listen(PORT, () => {
   console.log(`====================================================`);
-  console.log(` PushBridge Relay Server running on port ${PORT}`);
+  console.log(` PushBridge Relay Server v3.0 running on port ${PORT}`);
   console.log(` Health check: http://localhost:${PORT}/health`);
   console.log(` Firebase Project: ${projectId}`);
   console.log(` Firebase Admin Status: ${isFirebaseInitialized ? 'Connected' : 'Standalone Mode'}`);

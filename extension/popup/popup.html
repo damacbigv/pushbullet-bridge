@@ -18,7 +18,7 @@
       <div class="flex items-center gap-2">
         <h1 class="text-sm font-bold tracking-tight text-white flex items-center gap-1.5">
           PushBridge
-          <span class="text-[10px] font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/20 px-1.5 py-0.5 rounded">v2.5</span>
+          <span class="text-[10px] font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/20 px-1.5 py-0.5 rounded">v3.0</span>
         </h1>
       </div>
 
@@ -133,25 +133,45 @@
     <section id="tab-sms" class="tab-pane hidden h-full flex overflow-hidden">
 
       <!-- LEFT SIDEBAR: Contact & Conversation Threads List -->
-      <aside class="w-[290px] border-r border-slate-800 flex flex-col bg-slate-900/60 shrink-0">
+      <aside class="w-[300px] border-r border-slate-800 flex flex-col bg-slate-900/60 shrink-0">
         <!-- Search & New Message Bar -->
         <div class="p-2.5 border-b border-slate-800 space-y-2 relative">
           <div class="flex items-center gap-1.5">
             <div class="relative flex-1">
-              <input type="text" id="sms-search-input" placeholder="Search contacts, names or SMS..."
+              <input type="text" id="sms-search-input" placeholder="Search contacts, names or messages..."
                 autocomplete="off"
-                class="w-full bg-slate-950 border border-slate-800 rounded-lg pl-7 pr-2.5 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500">
+                class="w-full bg-slate-950 border border-slate-800 rounded-lg pl-7 pr-7 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500">
               <span class="absolute left-2.5 top-2 text-slate-500 text-xs">🔍</span>
+              <button id="btn-clear-sms-search" type="button" title="Clear search" class="hidden absolute right-2 top-1.5 text-slate-400 hover:text-white text-xs p-0.5 cursor-pointer">
+                ✕
+              </button>
             </div>
             <button id="btn-new-chat" title="Compose New Message" class="p-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold transition shrink-0 cursor-pointer shadow-sm">
               +
             </button>
           </div>
 
+          <!-- Quick Text Search Feedback Indicator -->
+          <div id="sms-search-feedback-strip" class="hidden flex items-center justify-between text-[10px] px-1 text-slate-400">
+            <span id="sms-search-match-count" class="text-amber-400 font-medium">0 matches</span>
+            <span class="text-slate-500 font-mono">In-memory index</span>
+          </div>
+
           <!-- Contacts Autocomplete Popover (Keyboard Accessible) -->
           <div id="contacts-autocomplete-popover" class="hidden absolute left-2.5 right-2.5 top-[44px] bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-40 max-h-[260px] overflow-y-auto divide-y divide-slate-800/80">
             <!-- Rendered dynamically -->
           </div>
+        </div>
+
+        <!-- Scalable Thread Pagination Limit Controls (30 / 50 / 100) -->
+        <div class="px-2.5 py-1.5 border-b border-slate-800 flex items-center justify-between text-[11px] bg-slate-950/40">
+          <span class="text-slate-400 font-medium text-[10px] uppercase tracking-wider">Show:</span>
+          <div class="flex items-center gap-1 bg-slate-900/90 border border-slate-800 rounded-lg p-0.5" id="thread-pagination-pill-group">
+            <button id="btn-limit-30" type="button" data-limit="30" class="thread-limit-btn px-2 py-0.5 rounded text-[10px] font-semibold bg-sky-600 text-white transition cursor-pointer">30</button>
+            <button id="btn-limit-50" type="button" data-limit="50" class="thread-limit-btn px-2 py-0.5 rounded text-[10px] font-medium text-slate-400 hover:text-white transition cursor-pointer">50</button>
+            <button id="btn-limit-100" type="button" data-limit="100" class="thread-limit-btn px-2 py-0.5 rounded text-[10px] font-medium text-slate-400 hover:text-white transition cursor-pointer">100</button>
+          </div>
+          <span id="active-threads-limit-badge" class="text-[10px] text-slate-400 font-mono">30 limit</span>
         </div>
 
         <!-- Conversation Threads List -->
@@ -308,6 +328,22 @@
 
   <!-- Global Toast Status Feedback Bar -->
   <div id="global-toast" class="hidden fixed bottom-3 right-3 bg-slate-900 border border-slate-700 text-xs text-white px-3 py-2 rounded-lg shadow-xl z-50 flex items-center gap-2"></div>
+
+  <!-- Fullscreen Photo / Media Lightbox Modal -->
+  <div id="media-lightbox-modal" class="hidden fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-center p-4 transition-all">
+    <div class="absolute top-4 right-4 flex items-center gap-3">
+      <a id="lightbox-download-link" href="#" download="PushBridge-media.jpg" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition border border-slate-700">
+        <span>⬇️</span> Download
+      </a>
+      <button id="btn-close-lightbox" type="button" class="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white flex items-center justify-center font-bold text-sm cursor-pointer transition border border-slate-700">
+        ✕
+      </button>
+    </div>
+    <div class="max-w-[92vw] max-h-[82vh] flex items-center justify-center overflow-hidden rounded-2xl border border-slate-800 shadow-2xl bg-black/80">
+      <img id="lightbox-image" src="" alt="MMS Photo" class="max-w-full max-h-[80vh] object-contain rounded-xl select-none">
+    </div>
+    <p id="lightbox-caption" class="text-xs text-slate-400 mt-3 text-center max-w-lg truncate px-4"></p>
+  </div>
 
   <!-- Scripts -->
   <script type="module" src="popup.js"></script>

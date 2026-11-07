@@ -1,5 +1,11 @@
 package com.example.pushbridge.model
 
+enum class DeviceRole {
+    PRIMARY_PHONE,     // Device has cellular telephony, SMS/MMS SIM card active
+    WIFI_TABLET,       // Device is a Wi-Fi only tablet (e.g. Galaxy Tab S7) pairing as a companion
+    DESKTOP_EXTENSION  // Chrome extension browser client
+}
+
 data class NotificationPayload(
     val id: String,
     val notificationKey: String,
@@ -32,13 +38,19 @@ data class SmsPayload(
     val id: String,
     val sender: String,
     val body: String,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    val isGroup: Boolean = false,
+    val recipients: List<String> = emptyList(),
+    val attachmentData: String? = null
 ) {
     fun toMap(): Map<String, Any?> = mapOf(
         "id" to id,
         "sender" to sender,
         "body" to body,
         "timestamp" to timestamp,
+        "isGroup" to isGroup,
+        "recipients" to recipients,
+        "attachmentData" to (attachmentData ?: ""),
         "type" to "sms"
     )
 }
@@ -51,7 +63,10 @@ data class SmsMessageItem(
     val body: String = "",
     val timestamp: Long = System.currentTimeMillis(),
     val isIncoming: Boolean = true,
-    val isRead: Boolean = true
+    val isRead: Boolean = true,
+    val attachmentUrl: String? = null,
+    val attachmentMime: String? = null,
+    val attachmentData: String? = null // Base64 data URI (e.g. data:image/jpeg;base64,...)
 ) {
     fun toMap(): Map<String, Any?> = mapOf(
         "id" to id,
@@ -61,7 +76,10 @@ data class SmsMessageItem(
         "body" to body,
         "timestamp" to timestamp,
         "isIncoming" to isIncoming,
-        "isRead" to isRead
+        "isRead" to isRead,
+        "attachmentUrl" to (attachmentUrl ?: ""),
+        "attachmentMime" to (attachmentMime ?: ""),
+        "attachmentData" to (attachmentData ?: "")
     )
 }
 
@@ -105,29 +123,12 @@ data class DeviceContactItem(
     )
 }
 
-data class DevicePresence(
-    val online: Boolean = true,
-    val lastHeartbeat: Long = System.currentTimeMillis(),
-    val deviceName: String = ""
-) {
-    fun toMap(): Map<String, Any?> = mapOf(
-        "online" to online,
-        "lastHeartbeat" to lastHeartbeat,
-        "deviceName" to deviceName
-    )
-}
-
-data class InboundCommand(
-    val commandId: String = "",
-    val type: String = "", // "REMOTE_REPLY", "SEND_SMS", "SYNC_THREADS"
-    val threadId: Long? = null,
-    val notificationKey: String? = null,
-    val replyText: String? = null,
-    val recipient: String? = null,
-    val isGroup: Boolean = false,
-    val recipients: List<String> = emptyList(),
-    val message: String? = null,
-    val timestamp: Long = System.currentTimeMillis(),
-    val status: String = "pending",
-    val result: String? = null
+data class PeerDeviceState(
+    val deviceId: String,
+    val name: String,
+    val role: DeviceRole,
+    val online: Boolean,
+    val lastHeartbeat: Long,
+    val model: String = "",
+    val isPrimaryTelephony: Boolean = false
 )

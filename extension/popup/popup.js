@@ -1,8 +1,8 @@
 /**
- * PushBridge v2.5 Popup & Desktop Dashboard Controller
- * Implements Threaded SMS & Group Chat, Contact Resolution & Identity Mapping,
- * Keyboard-Accessible Combined Contact Autocomplete,
- * and Automatic Thread Synchronization with Real-Time Device Presence Monitoring.
+ * PushBridge v3.0 Popup & Desktop Dashboard Controller
+ * Implements Scalable Thread Pagination (30/50/100), In-Memory Quick Text Search,
+ * Inline Photo/Media Lightbox, URL OpenGraph Previews, Group Chat Replies,
+ * and Multi-Device Peer Presence Monitoring.
  */
 import {
   syncGoogleContacts,
@@ -23,12 +23,16 @@ let collapsedBundles = new Set();
 let phoneIsOnline = true;
 let searchAutocomplete = null;
 let composeAutocomplete = null;
+let currentThreadLimit = 30; // 30 | 50 | 100
+let currentSearchQuery = '';
+let mediaLightboxInitialized = false;
 
 document.addEventListener('DOMContentLoaded', async () => {
   setupTabs();
   setupGoogleContacts();
   setupNotificationViews();
   setupThreadedSms();
+  setupMediaLightbox();
   setupClipboardSync();
   setupWindowExpansion();
   setupGlobalEvents();
@@ -78,9 +82,13 @@ function setupTabs() {
 }
 
 async function restoreSavedState() {
-  const saved = await chrome.storage.local.get(['notificationViewMode', 'activeTargetDeviceId']);
+  const saved = await chrome.storage.local.get(['notificationViewMode', 'activeTargetDeviceId', 'smsThreadPaginationLimit']);
   if (saved.notificationViewMode) {
     currentViewMode = saved.notificationViewMode;
+  }
+  if (saved.smsThreadPaginationLimit) {
+    currentThreadLimit = Number(saved.smsThreadPaginationLimit) || 30;
+    updatePaginationUI(currentThreadLimit);
   }
   updateViewModeToggleUI();
 }
@@ -139,20 +147,23 @@ function updatePresenceUI(presence) {
 
   if (!badge || !dot || !text) return;
 
-  // Heartbeat freshness tolerance: within 3 minutes (180,000 ms)
-  const isFresh = presence?.lastHeartbeat && (Date.now() - presence.lastHeartbeat < 180000);
+  // Heartbeat freshness tolerance: within 5 minutes (300,000 ms)
+  const isFresh = presence?.lastHeartbeat && (Date.now() - presence.lastHeartbeat < 300000);
   const isOnline = !!presence && (presence.online === true || isFresh);
   phoneIsOnline = isOnline;
+
+  const isTablet = presence?.role === 'tablet' || (currentTargetDeviceId && currentTargetDeviceId.startsWith('tablet_'));
+  const deviceLabel = isTablet ? 'Tablet' : 'Phone';
 
   if (isOnline) {
     badge.className = 'flex items-center gap-1.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-2.5 py-0.5 rounded-full text-[11px] font-medium transition cursor-default';
     dot.className = 'w-2 h-2 rounded-full bg-emerald-400 animate-pulse';
-    text.textContent = 'Phone Online';
+    text.textContent = `${deviceLabel} Online`;
     offlineBanner?.classList.add('hidden');
   } else {
     badge.className = 'flex items-center gap-1.5 bg-rose-500/10 border border-rose-500/20 text-rose-400 px-2.5 py-0.5 rounded-full text-[11px] font-medium transition cursor-default';
     dot.className = 'w-2 h-2 rounded-full bg-rose-500';
-    text.textContent = 'Phone Offline';
+    text.textContent = `${deviceLabel} Offline`;
     offlineBanner?.classList.remove('hidden');
   }
 }
@@ -662,6 +673,8 @@ class ContactAutocomplete {
 function setupThreadedSms() {
   const searchInput = document.getElementById('sms-search-input');
   const searchPopover = document.getElementById('contacts-autocomplete-popover');
+  const btnClearSearch = document.getElementById('btn-clear-sms-search');
+  const feedbackStrip = document.getElementById('sms-search-feedback-strip');
   const btnNewChat = document.getElementById('btn-new-chat');
   const btnManualSync = document.getElementById('btn-manual-sync-sms');
   const btnSyncThreads = document.getElementById('btn-sync-threads');
@@ -674,9 +687,53 @@ function setupThreadedSms() {
   const newRecipientInput = document.getElementById('new-recipient-input');
   const composePopover = document.getElementById('compose-autocomplete-popover');
 
-  // 1. Sidebar Search Autocomplete
+  // 1. Scalable Thread Pagination Limit Controls (30 / 50 / 100)
+  const btnLimit30 = document.getElementById('btn-limit-30');
+  const btnLimit50 = document.getElementById('btn-limit-50');
+  const btnLimit100 = document.getElementById('btn-limit-100');
+
+  [btnLimit30, btnLimit50, btnLimit100].forEach(btn => {
+    btn?.addEventListener('click', async () => {
+      const limit = Number(btn.getAttribute('data-limit')) || 30;
+      updatePaginationUI(limit);
+      await chrome.storage.local.set({ smsThreadPaginationLimit: limit });
+      await loadSmsThreads();
+      await triggerSmsSync(limit);
+    });
+  });
+
+  // 2. In-Memory Quick Text Search across all loaded message bodies
+  let searchDebounceTimer = null;
+  searchInput?.addEventListener('input', () => {
+    clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(async () => {
+      currentSearchQuery = searchInput.value.trim();
+      if (currentSearchQuery) {
+        btnClearSearch?.classList.remove('hidden');
+        feedbackStrip?.classList.remove('hidden');
+      } else {
+        btnClearSearch?.classList.add('hidden');
+        feedbackStrip?.classList.add('hidden');
+      }
+      await loadSmsThreads();
+    }, 50);
+  });
+
+  btnClearSearch?.addEventListener('click', async () => {
+    if (searchInput) searchInput.value = '';
+    currentSearchQuery = '';
+    btnClearSearch?.classList.add('hidden');
+    feedbackStrip?.classList.add('hidden');
+    await loadSmsThreads();
+  });
+
+  // 3. Sidebar Search Autocomplete (for quick contact discovery)
   searchAutocomplete = new ContactAutocomplete(searchInput, searchPopover, async (contact) => {
-    searchInput.value = '';
+    if (searchInput) searchInput.value = '';
+    currentSearchQuery = '';
+    btnClearSearch?.classList.add('hidden');
+    feedbackStrip?.classList.add('hidden');
+
     const { smsThreads = {} } = await chrome.storage.local.get('smsThreads');
     const targetDigits = contact.cleanDigits || normalizePhoneNumber(contact.phone);
 
@@ -688,14 +745,14 @@ function setupThreadedSms() {
 
     if (existingThread) {
       activeThreadId = String(existingThread.threadId);
-      document.getElementById('new-recipient-bar').classList.add('hidden');
+      document.getElementById('new-recipient-bar')?.classList.add('hidden');
       await loadSmsThreads();
     } else {
       startNewConversation(contact.phone, contact.name);
     }
   });
 
-  // 2. Compose View Recipient Autocomplete
+  // 4. Compose View Recipient Autocomplete
   composeAutocomplete = new ContactAutocomplete(newRecipientInput, composePopover, (contact) => {
     newRecipientInput.value = contact.phone;
     newChatRecipient = contact.phone;
@@ -710,8 +767,8 @@ function setupThreadedSms() {
   });
 
   // Manual SMS Sync from phone
-  btnManualSync?.addEventListener('click', triggerSmsSync);
-  btnSyncThreads?.addEventListener('click', triggerSmsSync);
+  btnManualSync?.addEventListener('click', () => triggerSmsSync(currentThreadLimit));
+  btnSyncThreads?.addEventListener('click', () => triggerSmsSync(currentThreadLimit));
 
   // File attachment handler
   btnAttach?.addEventListener('click', () => fileInput.click());
@@ -748,7 +805,7 @@ function setupThreadedSms() {
     }
   });
 
-  // Submit chat message
+  // Submit chat message (supports 1-on-1 and multi-recipient group broadcasts)
   composerForm?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const text = composerInput.value.trim();
@@ -784,13 +841,15 @@ function setupThreadedSms() {
       recipientsList = (thread.recipients || []).map(r => r.phone || r.cleanDigits || r);
     }
 
+    const payloadAttachment = selectedChatAttachment;
+
     composerInput.value = '';
     selectedChatAttachment = null;
     fileInput.value = '';
     attachmentPreview.classList.add('hidden');
 
     if (!phoneIsOnline) {
-      showToast('⚠️ Phone is offline. Message queued for delivery on reconnect.');
+      showToast('⚠️ Phone is offline. Outbound message queued for delivery on reconnect.');
     }
 
     try {
@@ -802,13 +861,15 @@ function setupThreadedSms() {
         isGroup,
         recipients: recipientsList,
         messageBody: text,
-        attachment: selectedChatAttachment
+        attachment: payloadAttachment,
+        attachmentData: payloadAttachment?.base64 || null,
+        attachmentMime: payloadAttachment?.type || null
       });
 
       if (res && res.success) {
         if (activeThreadId === 'new_chat' && res.threadKey) {
           activeThreadId = res.threadKey;
-          document.getElementById('new-recipient-bar').classList.add('hidden');
+          document.getElementById('new-recipient-bar')?.classList.add('hidden');
         }
         await loadSmsThreads();
         await renderActiveConversation();
@@ -821,16 +882,37 @@ function setupThreadedSms() {
   });
 }
 
-async function triggerSmsSync() {
-  showToast('Requesting SMS & MMS threads from Android phone...');
+function updatePaginationUI(limit) {
+  currentThreadLimit = limit;
+  const btn30 = document.getElementById('btn-limit-30');
+  const btn50 = document.getElementById('btn-limit-50');
+  const btn100 = document.getElementById('btn-limit-100');
+  const badge = document.getElementById('active-threads-limit-badge');
+
+  [btn30, btn50, btn100].forEach(b => {
+    if (!b) return;
+    const isThis = Number(b.getAttribute('data-limit')) === limit;
+    b.className = isThis
+      ? 'thread-limit-btn px-2 py-0.5 rounded text-[10px] font-semibold bg-sky-600 text-white transition cursor-pointer'
+      : 'thread-limit-btn px-2 py-0.5 rounded text-[10px] font-medium text-slate-400 hover:text-white transition cursor-pointer';
+  });
+
+  if (badge) {
+    badge.textContent = `${limit} limit`;
+  }
+}
+
+async function triggerSmsSync(limit = currentThreadLimit) {
+  showToast(`Requesting top ${limit} SMS threads from Android phone...`);
   try {
     await chrome.runtime.sendMessage({
       type: 'TRIGGER_SMS_SYNC',
-      targetDeviceId: currentTargetDeviceId || 'android_companion'
+      targetDeviceId: currentTargetDeviceId || 'android_companion',
+      limit: Number(limit) || 30
     });
     setTimeout(async () => {
       await loadSmsThreads();
-      showToast('✓ SMS & Group threads refreshed from phone');
+      showToast(`✓ Refreshed ${limit} threads from phone`);
     }, 2000);
   } catch (err) {
     showToast(`Sync error: ${err.message}`);
@@ -880,42 +962,85 @@ async function loadSmsThreads() {
   const counter = document.getElementById('threads-counter');
   const summaryText = document.getElementById('threads-summary-text');
 
-  let { smsThreads = {} } = await chrome.storage.local.get('smsThreads');
-  let threadsList = Object.values(smsThreads);
+  let { smsThreads = {}, smsThreadPaginationLimit } = await chrome.storage.local.get(['smsThreads', 'smsThreadPaginationLimit']);
+  if (smsThreadPaginationLimit) {
+    currentThreadLimit = Number(smsThreadPaginationLimit) || 30;
+    updatePaginationUI(currentThreadLimit);
+  }
 
-  if (threadsList.length === 0) {
+  let allThreadsList = Object.values(smsThreads);
+
+  if (allThreadsList.length === 0) {
     try {
       const res = await chrome.runtime.sendMessage({
         type: 'FETCH_SMS_THREADS',
-        targetDeviceId: currentTargetDeviceId || 'android_companion'
+        targetDeviceId: currentTargetDeviceId || 'android_companion',
+        limit: currentThreadLimit
       });
       if (res && res.threads) {
         smsThreads = res.threads;
-        threadsList = Object.values(smsThreads);
+        allThreadsList = Object.values(smsThreads);
       }
     } catch {}
   }
 
   // Fallback demo conversations if empty so interface displays immediately
-  if (threadsList.length === 0) {
-    threadsList = getFallbackSmsThreads();
+  if (allThreadsList.length === 0) {
+    allThreadsList = getFallbackSmsThreads();
+  }
+
+  // In-Memory Quick Text Search: real-time filtering across contacts, numbers, snippets, and all loaded message bodies
+  let filteredList = allThreadsList;
+  let matchCount = 0;
+
+  if (currentSearchQuery) {
+    const qLower = currentSearchQuery.toLowerCase();
+    filteredList = allThreadsList.filter(t => {
+      const nameMatch = (t.contactName || '').toLowerCase().includes(qLower) ||
+                        (t.groupTitle || '').toLowerCase().includes(qLower);
+      const addrMatch = (t.address || '').toLowerCase().includes(qLower) ||
+                        normalizePhoneNumber(t.address || '').includes(normalizePhoneNumber(currentSearchQuery));
+      const snippetMatch = (t.snippet || '').toLowerCase().includes(qLower);
+      const msgs = t.messages ? Object.values(t.messages) : [];
+      const msgMatch = msgs.some(m => (m.body || '').toLowerCase().includes(qLower) ||
+                                      (m.contactName || '').toLowerCase().includes(qLower));
+      const matched = nameMatch || addrMatch || snippetMatch || msgMatch;
+      if (matched) matchCount++;
+      return matched;
+    });
+
+    const matchCountEl = document.getElementById('sms-search-match-count');
+    if (matchCountEl) {
+      matchCountEl.textContent = `${matchCount} conversation${matchCount === 1 ? '' : 's'} matched`;
+    }
   }
 
   // Sort newest first
-  threadsList.sort((a, b) => (b.lastTimestamp || 0) - (a.lastTimestamp || 0));
+  filteredList.sort((a, b) => (b.lastTimestamp || 0) - (a.lastTimestamp || 0));
 
-  counter.textContent = threadsList.length;
-  summaryText.textContent = `${threadsList.length} conversation${threadsList.length === 1 ? '' : 's'}`;
+  // Scalable Thread Pagination (30 / 50 / 100)
+  const paginatedList = filteredList.slice(0, currentThreadLimit);
+
+  if (counter) counter.textContent = filteredList.length;
+  if (summaryText) summaryText.textContent = `${paginatedList.length} of ${filteredList.length} conversation${filteredList.length === 1 ? '' : 's'}`;
 
   container.innerHTML = '';
-  for (const thread of threadsList) {
-    const card = await createThreadListItem(thread);
-    container.appendChild(card);
+  if (paginatedList.length === 0) {
+    container.innerHTML = `
+      <div class="p-6 text-center text-slate-500 text-xs">
+        ${currentSearchQuery ? `No conversations matching "<span class="text-amber-300 font-medium">${escapeHtml(currentSearchQuery)}</span>"` : 'No conversations found.'}
+      </div>
+    `;
+  } else {
+    for (const thread of paginatedList) {
+      const card = await createThreadListItem(thread);
+      container.appendChild(card);
+    }
   }
 
-  // Select first thread by default if none selected
-  if (!activeThreadId && threadsList.length > 0) {
-    activeThreadId = String(threadsList[0].threadId);
+  // Select first thread by default if none selected or if activeThreadId is no longer present
+  if ((!activeThreadId || !filteredList.some(t => String(t.threadId) === String(activeThreadId))) && filteredList.length > 0) {
+    activeThreadId = String(filteredList[0].threadId);
   }
 
   await renderActiveConversation();
@@ -923,7 +1048,7 @@ async function loadSmsThreads() {
 
 /**
  * Requirement 1 & 2: Renders thread list item with full contact resolution,
- * avatar/initials, and group chat indicator.
+ * avatar/initials, group chat indicator, and keyword search highlighting.
  */
 async function createThreadListItem(thread) {
   const item = document.createElement('div');
@@ -992,6 +1117,11 @@ async function createThreadListItem(thread) {
 
   const timeStr = formatTimestamp(thread.lastTimestamp);
 
+  // Apply real-time search keyword highlighting
+  const renderedName = currentSearchQuery ? highlightKeywords(escapeHtml(displayName), currentSearchQuery) : escapeHtml(displayName);
+  const snippetText = thread.snippet || 'No messages';
+  const renderedSnippet = currentSearchQuery ? highlightKeywords(escapeHtml(snippetText), currentSearchQuery) : escapeHtml(snippetText);
+
   item.innerHTML = `
     <!-- Contact Avatar -->
     ${avatarHtml}
@@ -999,11 +1129,11 @@ async function createThreadListItem(thread) {
     <!-- Info & Snippet -->
     <div class="flex-1 min-w-0">
       <div class="flex items-center justify-between mb-0.5">
-        <h3 class="text-xs font-bold text-slate-100 truncate">${escapeHtml(displayName)}</h3>
+        <h3 class="text-xs font-bold text-slate-100 truncate">${renderedName}</h3>
         <span class="text-[10px] text-slate-500 shrink-0 ml-1">${timeStr}</span>
       </div>
       <div class="flex items-center justify-between">
-        <p class="text-[11px] text-slate-400 truncate flex-1">${escapeHtml(thread.snippet || 'No messages')}</p>
+        <p class="text-[11px] text-slate-400 truncate flex-1">${renderedSnippet}</p>
         ${isGroup ? `<span class="text-[9px] bg-purple-500/20 text-purple-300 border border-purple-500/30 px-1 py-0.2 rounded ml-1 font-medium shrink-0">Group</span>` : ''}
       </div>
     </div>
@@ -1017,7 +1147,7 @@ async function createThreadListItem(thread) {
 
   item.addEventListener('click', () => {
     activeThreadId = String(thread.threadId);
-    document.getElementById('new-recipient-bar').classList.add('hidden');
+    document.getElementById('new-recipient-bar')?.classList.add('hidden');
     document.querySelectorAll('.thread-item-card').forEach(el => el.classList.remove('bg-slate-800', 'border-sky-500'));
     item.classList.add('bg-slate-800', 'border-sky-500');
     renderActiveConversation();
@@ -1151,6 +1281,10 @@ async function renderActiveConversation() {
   container.scrollTop = container.scrollHeight;
 }
 
+/**
+ * Requirements 3, 4, 5: Renders message bubble with inline photo/media thumbnail previews,
+ * click-to-expand lightbox modal, rich URL OpenGraph previews, and real-time keyword highlighting.
+ */
 function createChatBubble(msg, senderName, isGroupChat = false) {
   const row = document.createElement('div');
   const isIncoming = msg.isIncoming;
@@ -1162,15 +1296,43 @@ function createChatBubble(msg, senderName, isGroupChat = false) {
     ? 'bg-slate-800 text-slate-100 rounded-2xl rounded-tl-sm border border-slate-700/60'
     : 'bg-sky-600 text-white rounded-2xl rounded-tr-sm shadow-md';
 
+  // Format message text with clickable links and real-time search keyword highlighting
+  let formattedBody = linkifyText(msg.body || '');
+  if (currentSearchQuery) {
+    formattedBody = highlightKeywords(formattedBody, currentSearchQuery);
+  }
+
+  // Detect photo / media attachment (MMS image parts, Base64 data URIs, or object URLs)
+  const mediaSrc = msg.attachmentData || msg.attachmentUrl || (msg.attachment && (msg.attachment.base64 || msg.attachment.data));
+  let mediaHtml = '';
+  if (mediaSrc) {
+    mediaHtml = `
+      <div class="chat-media-thumbnail mt-2 overflow-hidden rounded-xl border border-slate-700/80 max-w-[280px] cursor-pointer group relative bg-black/40 shadow-sm" title="Click to view full photo in lightbox">
+        <img src="${mediaSrc}" class="w-full max-h-[220px] object-cover group-hover:scale-105 transition-transform duration-200 rounded-xl select-none" alt="MMS Photo" loading="lazy">
+        <div class="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center rounded-xl">
+          <span class="bg-slate-900/90 text-white text-[10px] px-2 py-1 rounded-md font-medium border border-slate-700 shadow-md">🔍 Click to expand</span>
+        </div>
+      </div>
+    `;
+  }
+
+  // Detect URL for OpenGraph Link Preview Card
+  const urlMatches = (msg.body || '').match(/https?:\/\/[^\s<>"']+/gi);
+  const detectedUrl = urlMatches ? urlMatches[0] : null;
+  const previewContainerId = detectedUrl ? `preview-${Math.random().toString(36).substring(2, 9)}` : null;
+  const linkPreviewHtml = detectedUrl ? `<div id="${previewContainerId}" class="link-preview-slot mt-2"></div>` : '';
+
   row.innerHTML = `
-    <div class="max-w-[78%] px-3.5 py-2 text-xs leading-relaxed break-words ${bubbleClass}">
+    <div class="max-w-[82%] px-3.5 py-2 text-xs leading-relaxed break-words ${bubbleClass}">
       ${isIncoming && isGroupChat && senderName ? `
         <p class="text-[10px] font-bold text-sky-400 mb-0.5 flex items-center gap-1">
           <span class="w-1.5 h-1.5 rounded-full bg-sky-400"></span>
           ${escapeHtml(senderName)}
         </p>
       ` : ''}
-      <p class="select-text whitespace-pre-wrap">${escapeHtml(msg.body)}</p>
+      ${formattedBody ? `<div class="select-text whitespace-pre-wrap">${formattedBody}</div>` : ''}
+      ${mediaHtml}
+      ${linkPreviewHtml}
     </div>
     <div class="flex items-center gap-1 text-[10px] text-slate-500 px-1">
       <span>${timeStr}</span>
@@ -1178,7 +1340,133 @@ function createChatBubble(msg, senderName, isGroupChat = false) {
     </div>
   `;
 
+  // Attach media thumbnail click listener to open full lightbox
+  if (mediaSrc) {
+    const thumb = row.querySelector('.chat-media-thumbnail');
+    thumb?.addEventListener('click', () => {
+      openMediaLightbox(mediaSrc, msg.body || senderName || 'MMS Photo Attachment');
+    });
+  }
+
+  // Asynchronously fetch OpenGraph preview and render thumbnail card
+  if (detectedUrl && previewContainerId) {
+    renderUrlPreviewCard(detectedUrl, previewContainerId);
+  }
+
   return row;
+}
+
+/**
+ * Requirement 5: Asynchronously fetches OpenGraph preview metadata
+ * and displays rich card thumbnail preview inside chat bubble.
+ */
+async function renderUrlPreviewCard(url, containerId) {
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: 'FETCH_LINK_PREVIEW',
+      url
+    });
+
+    const slot = document.getElementById(containerId);
+    if (!slot || !res || !res.success || !res.preview) return;
+
+    const preview = res.preview;
+    slot.innerHTML = `
+      <a href="${escapeHtml(preview.url)}" target="_blank" rel="noopener noreferrer" class="block rounded-xl border border-slate-700/60 bg-slate-900/90 hover:bg-slate-800/90 transition overflow-hidden text-left shadow-sm">
+        ${preview.image ? `<img src="${escapeHtml(preview.image)}" class="w-full h-28 object-cover border-b border-slate-800" alt="${escapeHtml(preview.title || '')}" onerror="this.remove()">` : ''}
+        <div class="p-2 space-y-0.5">
+          <div class="flex items-center gap-1.5 text-[10px] text-slate-400 font-mono">
+            <span>🔗</span>
+            <span class="truncate">${escapeHtml(preview.domain || preview.siteName || '')}</span>
+          </div>
+          <p class="text-[11px] font-bold text-slate-100 line-clamp-1 leading-snug">${escapeHtml(preview.title || preview.domain || '')}</p>
+          ${preview.description ? `<p class="text-[10px] text-slate-400 line-clamp-2 leading-relaxed">${escapeHtml(preview.description)}</p>` : ''}
+        </div>
+      </a>
+    `;
+  } catch (e) {
+    // Graceful fallback: silently leave just the clickable text link
+  }
+}
+
+/**
+ * Requirement 4: Fullscreen Photo / Media Lightbox Modal handler
+ */
+function setupMediaLightbox() {
+  if (mediaLightboxInitialized) return;
+  mediaLightboxInitialized = true;
+
+  const modal = document.getElementById('media-lightbox-modal');
+  const btnClose = document.getElementById('btn-close-lightbox');
+
+  btnClose?.addEventListener('click', closeMediaLightbox);
+
+  modal?.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      closeMediaLightbox();
+    }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal && !modal.classList.contains('hidden')) {
+      closeMediaLightbox();
+    }
+  });
+}
+
+function openMediaLightbox(src, caption = '') {
+  const modal = document.getElementById('media-lightbox-modal');
+  const img = document.getElementById('lightbox-image');
+  const captionEl = document.getElementById('lightbox-caption');
+  const downloadLink = document.getElementById('lightbox-download-link');
+
+  if (!modal || !img) return;
+
+  img.src = src;
+  if (captionEl) captionEl.textContent = caption;
+  if (downloadLink) {
+    downloadLink.href = src;
+    downloadLink.download = `PushBridge-photo-${Date.now()}.jpg`;
+  }
+
+  modal.classList.remove('hidden');
+}
+
+function closeMediaLightbox() {
+  const modal = document.getElementById('media-lightbox-modal');
+  const img = document.getElementById('lightbox-image');
+  if (modal) modal.classList.add('hidden');
+  if (img) img.src = '';
+}
+
+/**
+ * Requirement 3: Real-time search keyword highlighting helper
+ */
+function highlightKeywords(htmlText, query) {
+  if (!query || !query.trim() || !htmlText) return htmlText;
+  const terms = query.trim().split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return htmlText;
+
+  // Split text by HTML tags to only highlight text outside tags
+  const parts = htmlText.split(/(<[^>]+>)/g);
+  const regex = new RegExp(`(${terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'gi');
+
+  return parts.map(part => {
+    if (part.startsWith('<') && part.endsWith('>')) {
+      return part; // inside an HTML tag, don't modify
+    }
+    return part.replace(regex, '<mark class="bg-amber-400/30 text-amber-200 px-0.5 rounded font-medium">$1</mark>');
+  }).join('');
+}
+
+/**
+ * Requirement 5: Converts web URLs into secure clickable links
+ */
+function linkifyText(text) {
+  if (!text) return '';
+  const escaped = escapeHtml(text);
+  const urlPattern = /(https?:\/\/[^\s<>"']+)/gi;
+  return escaped.replace(urlPattern, '<a href="$1" target="_blank" rel="noopener noreferrer" class="text-sky-300 underline hover:text-sky-100 font-medium break-all">$1</a>');
 }
 
 // =============================================================
@@ -1350,7 +1638,7 @@ function getFallbackSmsThreads() {
           threadId: 201,
           address: '+1 (555) 876-5432',
           contactName: 'Bob Martinez',
-          body: 'Yes! Weather looks clear and sunny.',
+          body: 'Yes! Weather looks clear and sunny. Check the trail map here: https://www.alltrails.com',
           timestamp: Date.now() - 1000 * 60 * 18,
           isIncoming: true,
           isRead: true
@@ -1360,7 +1648,9 @@ function getFallbackSmsThreads() {
           threadId: 201,
           address: 'chrome_desktop',
           contactName: 'Me',
-          body: 'I can bring snacks and trail mix for the group.',
+          body: 'Here is the parking permit pass for the trailhead:',
+          attachmentData: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="400" height="240" viewBox="0 0 400 240"><rect width="400" height="240" rx="16" fill="%231e293b"/><rect x="20" y="20" width="360" height="200" rx="12" fill="%230f172a" stroke="%2338bdf8" stroke-width="2"/><text x="200" y="70" fill="%2338bdf8" font-size="20" font-weight="bold" font-family="sans-serif" text-anchor="middle">BEAR PEAK TRAIL PERMIT</text><text x="200" y="115" fill="%23f8fafc" font-size="14" font-family="sans-serif" text-anchor="middle">Weekend Day Pass • Group 4</text><circle cx="200" cy="155" r="24" fill="%230284c7"/><text x="200" y="162" fill="%23ffffff" font-size="20" font-weight="bold" text-anchor="middle">✓</text><text x="200" y="200" fill="%2394a3b8" font-size="11" font-family="monospace" text-anchor="middle">ID: BP-2026-99482</text></svg>',
+          attachmentMime: 'image/svg+xml',
           timestamp: Date.now() - 1000 * 60 * 10,
           isIncoming: false,
           isRead: true

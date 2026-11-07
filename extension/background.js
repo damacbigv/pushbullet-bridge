@@ -661,24 +661,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const res = await fetch(targetUrl);
           const data = await res.json();
           const deviceIds = data && typeof data === 'object' ? Object.keys(data) : [];
-          sendResponse({ success: true, devices: deviceIds });
+          const { devicePresenceMap = {} } = await chrome.storage.local.get('devicePresenceMap');
+          sendResponse({ success: true, devices: deviceIds, presenceMap: devicePresenceMap });
           break;
         }
 
         case 'FETCH_SMS_THREADS': {
-          const { targetDeviceId } = message;
+          const { targetDeviceId, limit } = message;
           const targetUrl = `${RTDB_BASE_URL}/devices/${targetDeviceId}/sms_threads.json`;
           const res = await fetch(targetUrl);
           const data = await res.json();
           const threads = data && typeof data === 'object' ? data : {};
           await chrome.storage.local.set({ smsThreads: threads });
-          sendResponse({ success: true, threads });
+
+          let slicedThreads = threads;
+          if (limit && Number(limit) > 0) {
+            const sorted = Object.values(threads).sort((a, b) => (b.lastTimestamp || 0) - (a.lastTimestamp || 0));
+            const capped = sorted.slice(0, Number(limit));
+            slicedThreads = {};
+            capped.forEach(t => {
+              slicedThreads[String(t.threadId)] = t;
+            });
+          }
+          sendResponse({ success: true, threads: slicedThreads, allThreads: threads });
           break;
         }
 
         case 'SEND_CHAT_MESSAGE': {
-          const { targetDeviceId, threadId, recipient, messageBody, attachment, isGroup, recipients } = message;
+          const { targetDeviceId, threadId, recipient, messageBody, attachment, attachmentData, attachmentMime, isGroup, recipients } = message;
           const targetUrl = `${RTDB_BASE_URL}/devices/${targetDeviceId}/inbound_commands.json`;
+
+          const rawAttachmentData = attachment?.base64 || attachment?.data || attachmentData || null;
+          const rawAttachmentMime = attachment?.type || attachmentMime || null;
 
           const commandPayload = {
             type: 'SEND_SMS',
@@ -688,6 +702,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             recipients: recipients || [],
             message: messageBody,
             attachment: attachment || null,
+            attachmentData: rawAttachmentData,
+            attachmentMime: rawAttachmentMime,
             timestamp: Date.now(),
             status: 'pending'
           };
@@ -710,6 +726,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             threadId: Number(threadKey),
             address: recipient,
             body: messageBody,
+            attachmentData: rawAttachmentData,
+            attachmentMime: rawAttachmentMime,
             timestamp: Date.now(),
             isIncoming: false,
             isRead: true,
@@ -717,7 +735,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           };
 
           existingThread.messages = { ...existingThread.messages, [localMsgId]: newMsg };
-          existingThread.snippet = messageBody;
+          existingThread.snippet = messageBody || (rawAttachmentData ? '📷 [Photo]' : '');
           existingThread.lastTimestamp = Date.now();
 
           const updatedThreads = { ...smsThreads, [threadKey]: existingThread };
@@ -731,6 +749,101 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
           const result = await res.json();
           sendResponse({ success: res.ok, result, threadKey });
+          break;
+        }
+
+        case 'FETCH_LINK_PREVIEW': {
+          const { url } = message;
+          if (!url) {
+            sendResponse({ success: false, error: 'No URL provided' });
+            break;
+          }
+
+          const { linkPreviewCache = {} } = await chrome.storage.local.get('linkPreviewCache');
+          if (linkPreviewCache[url]) {
+            sendResponse({ success: true, preview: linkPreviewCache[url] });
+            break;
+          }
+
+          let preview = null;
+
+          // 1. Try relay server endpoint
+          try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 2000);
+            const relayRes = await fetch(`http://localhost:3000/api/link-preview?url=${encodeURIComponent(url)}`, {
+              signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+            if (relayRes.ok) {
+              const data = await relayRes.json();
+              if (data && data.success && data.preview) {
+                preview = data.preview;
+              }
+            }
+          } catch (e) {
+            // Relay server offline or timed out; fallback to client fetch
+          }
+
+          // 2. Direct client-side fetch fallback (enabled via host_permissions: "https://*/*")
+          if (!preview) {
+            try {
+              const controller = new AbortController();
+              const timeoutId = setTimeout(() => controller.abort(), 3000);
+              const pageRes = await fetch(url, {
+                headers: { 'Accept': 'text/html,application/xhtml+xml' },
+                signal: controller.signal
+              });
+              clearTimeout(timeoutId);
+
+              if (pageRes.ok) {
+                const html = await pageRes.text();
+                const urlObj = new URL(url);
+                const domain = urlObj.hostname.replace(/^www\./, '');
+
+                const getMeta = (prop) => {
+                  const m = html.match(new RegExp(`<meta[^>]+(?:property|name)=["']${prop}["'][^>]+content=["']([^"']+)["']`, 'i')) ||
+                            html.match(new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${prop}["']`, 'i'));
+                  return m ? m[1].trim() : null;
+                };
+
+                const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+                const title = getMeta('og:title') || (titleMatch ? titleMatch[1].trim() : domain);
+                const description = getMeta('og:description') || getMeta('description') || '';
+                let image = getMeta('og:image') || getMeta('twitter:image') || null;
+                if (image && !image.startsWith('http')) {
+                  try {
+                    image = new URL(image, url).href;
+                  } catch {
+                    image = null;
+                  }
+                }
+
+                preview = {
+                  url,
+                  domain,
+                  title: title.slice(0, 100),
+                  description: description.slice(0, 160),
+                  image,
+                  siteName: getMeta('og:site_name') || domain
+                };
+              }
+            } catch (err) {
+              console.warn('[PushBridge SW] Client link preview fetch fallback error:', err.message);
+            }
+          }
+
+          if (preview) {
+            const updatedCache = { ...linkPreviewCache, [url]: preview };
+            const keys = Object.keys(updatedCache);
+            if (keys.length > 100) {
+              delete updatedCache[keys[0]];
+            }
+            await chrome.storage.local.set({ linkPreviewCache: updatedCache });
+            sendResponse({ success: true, preview });
+          } else {
+            sendResponse({ success: false, error: 'Could not fetch metadata' });
+          }
           break;
         }
 
@@ -779,13 +892,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         case 'TRIGGER_SMS_SYNC': {
-          const { targetDeviceId } = message;
+          const { targetDeviceId, limit = 30 } = message;
           const targetUrl = `${RTDB_BASE_URL}/devices/${targetDeviceId}/inbound_commands.json`;
           const res = await fetch(targetUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               type: 'SYNC_SMS_THREADS',
+              limit: Number(limit) || 30,
               timestamp: Date.now(),
               status: 'pending'
             })

@@ -204,11 +204,10 @@ object SmsRepository {
                     messages = messagesMap
                 )
             )
-
-            if (resultThreads.size >= maxThreads) break
         }
 
-        return resultThreads.sortedByDescending { it.lastTimestamp }
+        val sorted = resultThreads.sortedByDescending { it.lastTimestamp }
+        return if (sorted.size > maxThreads) sorted.take(maxThreads) else sorted
     }
 
     /**
@@ -331,7 +330,7 @@ object SmsRepository {
                     val read = if (readCol != -1) c.getInt(readCol) == 1 else true
                     val isIncoming = msgBox == 1 // 1 = inbox, 2 = sent
 
-                    val textBody = getMmsText(context, mmsId)
+                    val mmsContent = getMmsContent(context, mmsId)
                     val sender = if (isIncoming) getMmsSender(context, mmsId) ?: "Group Member" else "Me"
 
                     list.add(
@@ -340,10 +339,12 @@ object SmsRepository {
                             threadId = threadId,
                             address = sender,
                             contactName = null,
-                            body = textBody,
+                            body = mmsContent.text,
                             timestamp = timestamp,
                             isIncoming = isIncoming,
-                            isRead = read
+                            isRead = read,
+                            attachmentData = mmsContent.attachmentData,
+                            attachmentMime = mmsContent.attachmentMime
                         )
                     )
                 }
@@ -355,45 +356,103 @@ object SmsRepository {
         return mmsMap
     }
 
+    private data class MmsContentResult(
+        val text: String,
+        val attachmentData: String? = null,
+        val attachmentMime: String? = null
+    )
+
     /**
-     * Extracts text content from MMS parts table.
+     * Extracts text content and inline image thumbnails from MMS parts table.
      */
-    private fun getMmsText(context: Context, mmsId: Long): String {
+    private fun getMmsContent(context: Context, mmsId: Long): MmsContentResult {
         val uri = Uri.parse("content://mms/part")
-        val selection = "mid = ? AND ct = 'text/plain'"
+        val selection = "mid = ?"
         val selectionArgs = arrayOf(mmsId.toString())
 
-        return try {
-            val cursor = context.contentResolver.query(uri, arrayOf("_id", "text", "_data"), selection, selectionArgs, null)
+        var textBody = ""
+        var attachmentData: String? = null
+        var attachmentMime: String? = null
+
+        try {
+            val cursor = context.contentResolver.query(
+                uri,
+                arrayOf("_id", "ct", "text", "_data"),
+                selection,
+                selectionArgs,
+                null
+            )
             cursor?.use { c ->
+                val idCol = c.getColumnIndex("_id")
+                val ctCol = c.getColumnIndex("ct")
                 val textCol = c.getColumnIndex("text")
                 val dataCol = c.getColumnIndex("_data")
+
                 val sb = StringBuilder()
 
                 while (c.moveToNext()) {
-                    val directText = if (textCol != -1) c.getString(textCol) else null
-                    if (!directText.isNullOrBlank()) {
-                        sb.append(directText)
-                    } else if (dataCol != -1) {
-                        val partId = c.getString(c.getColumnIndexOrThrow("_id"))
+                    val ct = if (ctCol != -1) c.getString(ctCol) ?: "" else ""
+                    val partId = if (idCol != -1) c.getString(idCol) else ""
+
+                    if (ct.startsWith("text/")) {
+                        val directText = if (textCol != -1) c.getString(textCol) else null
+                        if (!directText.isNullOrBlank()) {
+                            sb.append(directText)
+                        } else if (partId.isNotBlank()) {
+                            val partUri = Uri.parse("content://mms/part/$partId")
+                            try {
+                                context.contentResolver.openInputStream(partUri)?.use { isStream ->
+                                    val reader = BufferedReader(InputStreamReader(isStream))
+                                    var line = reader.readLine()
+                                    while (line != null) {
+                                        sb.append(line)
+                                        line = reader.readLine()
+                                    }
+                                }
+                            } catch (_: Exception) {}
+                        }
+                    } else if (ct.startsWith("image/") && attachmentData == null && partId.isNotBlank()) {
+                        // Extract and downsample MMS image thumbnail
                         val partUri = Uri.parse("content://mms/part/$partId")
                         try {
                             context.contentResolver.openInputStream(partUri)?.use { isStream ->
-                                val reader = BufferedReader(InputStreamReader(isStream))
-                                var line = reader.readLine()
-                                while (line != null) {
-                                    sb.append(line)
-                                    line = reader.readLine()
+                                val bitmap = android.graphics.BitmapFactory.decodeStream(isStream)
+                                if (bitmap != null) {
+                                    val maxDim = 480
+                                    val scale = if (bitmap.width > maxDim || bitmap.height > maxDim) {
+                                        val factor = Math.min(
+                                            maxDim.toFloat() / bitmap.width,
+                                            maxDim.toFloat() / bitmap.height
+                                        )
+                                        android.graphics.Bitmap.createScaledBitmap(
+                                            bitmap,
+                                            (bitmap.width * factor).toInt(),
+                                            (bitmap.height * factor).toInt(),
+                                            true
+                                        )
+                                    } else {
+                                        bitmap
+                                    }
+                                    val baos = java.io.ByteArrayOutputStream()
+                                    scale.compress(android.graphics.Bitmap.CompressFormat.JPEG, 70, baos)
+                                    val bytes = baos.toByteArray()
+                                    val b64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                                    attachmentData = "data:image/jpeg;base64,$b64"
+                                    attachmentMime = ct
                                 }
                             }
-                        } catch (_: Exception) {}
+                        } catch (e: Exception) {
+                            Log.d(TAG, "Failed decoding MMS image thumbnail for part $partId: ${e.message}")
+                        }
                     }
                 }
-                if (sb.isNotEmpty()) sb.toString() else "[MMS Attachment]"
-            } ?: "[MMS Message]"
+                textBody = if (sb.isNotEmpty()) sb.toString() else if (attachmentData != null) "[Photo]" else "[MMS Message]"
+            }
         } catch (e: Exception) {
-            "[MMS Message]"
+            textBody = "[MMS Message]"
         }
+
+        return MmsContentResult(textBody, attachmentData, attachmentMime)
     }
 
     /**

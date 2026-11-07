@@ -1,45 +1,48 @@
-# PushBridge v2.5.1
+# PushBridge v3.0.0
 
-> **Self-Hosted Cross-Platform Notification Mirroring, Threaded SMS & Group Chat Bridge**  
-> A private, modular alternative to Pushbullet connecting Google Chrome, Android devices, and a fallback cloud sync relay using Firebase as the real-time synchronization backend.
+> **Self-Hosted Cross-Platform Notification Mirroring, Scalable Threaded SMS, Group Chat Bridge & Multi-Device Tablet Companion**  
+> A private, modular alternative to Pushbullet connecting Google Chrome, Android phones, Wi-Fi tablets (e.g. Samsung Galaxy Tab S7), and cloud sync relays using Firebase as the real-time synchronization backend.
 
-[![Download Android APK](https://img.shields.io/badge/Download_APK-v2.5.1_(16_MB)-10B981?style=for-the-badge&logo=android&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/download/v2.5.1/PushBridge-v2.5.1.apk)
-[![GitHub Release](https://img.shields.io/badge/GitHub_Release-v2.5.1-6366F1?style=for-the-badge&logo=github&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v2.5.1)
-[![Chrome Extension](https://img.shields.io/badge/Chrome_Extension-Manifest_V3_(v2.5.1)-0EA5E9?style=for-the-badge&logo=googlechrome&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/tree/main/extension)
+[![Download Android APK](https://img.shields.io/badge/Download_APK-v3.0.0_(16_MB)-10B981?style=for-the-badge&logo=android&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/download/v3.0.0/PushBridge-v3.0.0.apk)
+[![GitHub Release](https://img.shields.io/badge/GitHub_Release-v3.0.0-6366F1?style=for-the-badge&logo=github&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v3.0.0)
+[![Chrome Extension](https://img.shields.io/badge/Chrome_Extension-Manifest_V3_(v3.0.0)-0EA5E9?style=for-the-badge&logo=googlechrome&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/tree/main/extension)
 
-📥 **Latest Release Page**: [GitHub Release v2.5.1](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v2.5.1)  
-📦 **Direct APK Download**: [PushBridge-v2.5.1.apk](https://github.com/damacbigv/pushbullet-bridge/releases/download/v2.5.1/PushBridge-v2.5.1.apk)
+📥 **Latest Release Page**: [GitHub Release v3.0.0](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v3.0.0)  
+📦 **Direct APK Download**: [PushBridge-v3.0.0.apk](https://github.com/damacbigv/pushbullet-bridge/releases/download/v3.0.0/PushBridge-v3.0.0.apk)
 
 ---
 
-## What's New in Version 2.5.1
+## What's New in Version 3.0.0
 
-1. **Premature Disconnection & SSE Heartbeat Fix**:
-   - Fixed parsing of Firebase Realtime SSE subpath events (`devices/{deviceId}/presence/lastHeartbeat`), preventing 30-second heartbeat timestamps from being evaluated as falsy.
-   - Built-in 3-minute heartbeat freshness tolerance to gracefully absorb mobile network handoffs (Wi-Fi ↔ LTE) and Android Doze battery optimizations without triggering offline banners.
-   - Atomic Android heartbeat dispatch (`presenceRef.updateChildren`) with active presence refresh during SMS, MMS, and notification transmissions.
-   - Resolved device selector startup race condition in Chrome Extension popup.
+### 1. Scalable SMS Thread Pagination (30 / 50 / 100 Threads)
+- **Dynamic Limit Selector**: Instantly choose 30, 50, or 100 active conversation threads directly in the extension and tablet UI.
+- **Optimized Content Provider Queries**: Android telephony content queries limit and slice MMS/SMS conversations on the device side before serialization, ensuring sub-50ms sync latencies without UI blocking or high memory consumption.
+- **Persistence**: User pagination preference is automatically persisted across browser restarts and device reconnects.
 
-2. **Contact Resolution & Identity Mapping in SMS Threads**:
-   - Cross-references incoming and existing phone numbers with Google Contacts and the local device telephony contact store.
-   - Automatically resolves numbers to contact display names, photos, and initials in both the thread list and conversation bubbles.
-   - Gracefully falls back to formatted readable telephone numbers (e.g. `+1 (555) 234-5678`) when unmapped.
+### 2. True Group Message Thread Handling & Broadcast Replies
+- **Multi-Recipient MMS Preservation**: Group conversations are accurately recognized via telephony canonical addresses and conversation IDs.
+- **Broadcast Routing**: Outbound replies typed from the Chrome Extension or Wi-Fi tablet route through the primary phone's telephony pipeline as a unified group MMS broadcast to all participants simultaneously, preventing conversation fragmentation into isolated 1-on-1 direct messages.
+- **Participant UI**: Displays group participant badges, contact chips, and broadcast notice banners in active chat timelines.
 
-2. **Multi-Recipient Group Chat Support**:
-   - Android Companion app parses multi-recipient group conversations via `content://mms-sms/conversations?simple=true` and resolves canonical addresses (`content://mms-sms/canonical-address/{id}`).
-   - Registered `MmsReceiver` for `WAP_PUSH_DELIVER` / `WAP_PUSH_RECEIVED` and a debounced `ContentObserver` on `content://mms-sms/` for automatic group message detection.
-   - Extension UI displays group icons (`👥`), group titles, participant counts, interactive participant chips, and broadcasts outbound messages to all recipients in the thread.
+### 3. In-Memory Quick Text Search & Keyword Highlighting
+- **Deep In-Memory Search**: Fast client-side search bar at the top of the SMS thread list indexes contact names, phone numbers, snippets, and all loaded message bodies.
+- **Real-Time Highlighting**: Highlights matching keywords as you type with `<mark>` badges inside conversation cards and chat bubbles.
+- **Interactive Feedback**: Instant search match counter with clear (`✕`) action.
 
-3. **Robust Contact Autocomplete with Full Keyboard Navigation**:
-   - Unified search across Google Contacts (People API) and synced device contacts.
-   - Keyboard accessible (`ArrowDown`, `ArrowUp`, `Enter`, `Escape`) with active highlight and automatic scrolling.
-   - Integrated into both the sidebar search bar and the "New Message" compose recipient bar.
+### 4. Inline Photo & Media Rendering with Click-to-Expand Lightbox
+- **MMS Attachment Extraction**: Automatically parses image parts (`image/*`) from `content://mms/part` and encodes optimized Base64 data URIs into the synchronized message stream.
+- **Interactive Chat Thumbnails**: Image attachments render cleanly within chat bubbles with hover-to-expand controls.
+- **Fullscreen Lightbox Modal**: Click-to-expand lightbox view with image zooming, caption metadata, direct download action, and keyboard `Escape` dismissal.
 
-4. **Automatic Thread Synchronization & Real-Time Device Presence**:
-   - Device presence heartbeat and connection status monitor via Firebase RTDB (`.info/connected` and `devices/{deviceId}/presence`).
-   - Android companions automatically maintain `online: true`, `lastHeartbeat`, and disconnect hooks (`onDisconnect`).
-   - Chrome background service worker detects when the phone transitions to **Online** and automatically synchronizes active SMS threads and contacts without requiring manual user polling.
-   - When the phone drops offline, the extension displays a `🔴 Phone Offline` status badge and an offline banner, safely queuing outbound messages until reconnected.
+### 5. URL Link Preview Thumbnails (OpenGraph Engine)
+- **Automatic Link Detection**: Chat bubbles detect web URLs and render clickable, secure links.
+- **Rich Card Previews**: Automatically extracts OpenGraph metadata (`og:title`, `og:description`, `og:image`, `og:site_name`, domain) with caching via relay server and direct client-side fallback.
+
+### 6. Wi-Fi Tablet Companion App & Multi-Device Sync Topology
+- **Tablet Compatibility**: Manifest flags allow installation on Wi-Fi-only tablets (such as Samsung Galaxy Tab S7) by declaring `android.hardware.telephony` optional (`required="false"`).
+- **Adaptive Dual-Pane Layout**: Tablet displays automatically present an edge-to-edge dual-column split view (threads on the left, active conversation on the right) on screens with width $\ge 600\,\text{dp}$.
+- **Peer-Sync Topology**: Wi-Fi tablets connect directly to Firebase Realtime Database to view and manage threads, mirror notifications, and queue outbound commands through the primary phone.
+- **iOS / iPad Companion Stub Architecture**: Includes a modular Swift/SwiftUI companion project architecture in `/ios-companion` designed for iPadOS.
 
 ---
 
@@ -47,36 +50,54 @@
 
 ```
 pushbullet-bridge/
-├── extension/          # Google Chrome Extension (Manifest V3 - v2.5.0)
-│   ├── manifest.json   # MV3 config with identity, notifications, storage, alarms
-│   ├── background.js   # Service worker: Firebase SSE stream, device presence, auto-sync
+├── extension/          # Google Chrome Extension (Manifest V3 - v3.0.0)
+│   ├── manifest.json   # MV3 config with permissions & host permissions
+│   ├── background.js   # Service worker: Firebase SSE stream, device presence, OpenGraph fallback
 │   ├── firebase-config.js # Firebase Realtime Database configuration
 │   ├── contacts/
-│   │   └── google-contacts.js # People API OAuth2, device contact cache, identity resolution
+│   │   └── google-contacts.js # People API OAuth2, contact cache, identity resolution
 │   ├── popup/
-│   │   ├── popup.html  # Split-pane SMS/group chat, presence badges, bundled notifications
-│   │   ├── popup.js    # Thread controller, group chat renderer, autocomplete, presence
+│   │   ├── popup.html  # Split-pane UI, search bar, pagination buttons, media lightbox
+│   │   ├── popup.js    # Thread controller, in-memory search, photo thumbnails, link previews
 │   │   └── tailwind.css# Standalone Tailwind CSS v4 styling
 │   └── icons/          # Multi-resolution icon set (16px, 48px, 128px)
 │
-├── android-app/        # Native Kotlin Android Companion App
+├── android-app/        # Native Kotlin Android Companion App (Phone & Tablet)
 │   ├── app/src/main/
-│   │   ├── AndroidManifest.xml # SMS, MMS, WAP_PUSH, and Notification listener setup
+│   │   ├── AndroidManifest.xml # Non-telephony tablet support & large screen declarations
 │   │   └── java/com/example/pushbridge/
-│   │       ├── MainActivity.kt        # Edge-to-edge Compose container & permission flows
-│   │       ├── ui/main/MainScreen.kt  # Bridge status dashboard & thread sync triggers
-│   │       ├── service/               # NotificationListenerService with Telephony ContentObserver
+│   │       ├── MainActivity.kt        # Adaptive Compose container & permission flows
+│   │       ├── ui/main/MainScreen.kt  # Tablet dual-pane layout & device role badges
+│   │       ├── service/               # NotificationListenerService with ContentObserver
 │   │       ├── receiver/              # SmsReceiver and MmsReceiver
 │   │       ├── data/
-│   │       │   ├── SmsRepository.kt   # Group MMS detection, canonical addresses & contacts
-│   │       │   ├── PushBridgeFirebaseManager.kt # Presence monitor, group broadcast engine
+│   │       │   ├── SmsRepository.kt   # MMS image downsampling, pagination & group threads
+│   │       │   ├── PushBridgeFirebaseManager.kt # Peer-sync, tablet detection, command dispatch
 │   │       │   └── PushBridgeSyncManager.kt     # Fallback HTTP sync dispatcher
-│   │       └── util/                  # SmsManagerHelper & NotificationReplyRegistry
+│   │       └── model/                 # DeviceRole, PeerDeviceState, and SyncModels
 │   └── build.gradle.kts
 │
-├── relay-server/       # Lightweight Node.js/Express Service
-│   ├── src/server.js
+├── relay-server/       # Lightweight Node.js/Express Relay Service
+│   ├── src/
+│   │   ├── controllers/
+│   │   │   ├── previewController.js  # In-memory caching OpenGraph parser
+│   │   │   ├── deviceController.js   # Peer command dispatcher & device role manager
+│   │   │   └── pushController.js
+│   │   ├── routes/
+│   │   │   ├── preview.js            # GET /api/link-preview
+│   │   │   └── devices.js            # POST /api/devices/command
+│   │   └── server.js
 │   └── package.json
+│
+├── ios-companion/      # iOS / iPad Companion Architecture (SwiftUI & Swift)
+│   ├── PushBridgePad/
+│   │   ├── Models/PushBridgeModels.swift
+│   │   ├── Services/FirebaseRelayManager.swift
+│   │   └── Views/TabletDashboardView.swift
+│   └── README.md
+│
+├── releases/           # Pre-compiled binaries & distribution packages
+│   └── PushBridge-v3.0.0.apk
 │
 ├── package.json        # Workspace orchestrator scripts
 └── README.md
@@ -92,55 +113,35 @@ pushbullet-bridge/
    ```
    chrome://extensions/
    ```
-2. Enable **Developer mode** toggle in the top-right corner.
+2. Enable the **Developer mode** toggle in the top-right corner.
 3. Click the **Load unpacked** button.
-4. Select the `extension/` directory from this project workspace:
+4. Select the `extension/` directory from this workspace:
    ```
    /Users/volliver/.gemini/antigravity/scratch/pushbullet-bridge/extension
    ```
-5. The **PushBridge - Notification & SMS Sync (v2.5.0)** extension will now appear in your toolbar.
-6. Click the extension puzzle icon and pin **PushBridge** for instant access.
-7. Open the popup:
-   - Click **Google Contacts** in the header to authenticate with Google People API.
-   - The device status badge will show `🟢 Phone Online` once your Android companion connects.
+5. Pin the **PushBridge** icon to your Chrome toolbar.
 
----
+### 2. Android Companion App (Phone or Wi-Fi Tablet)
 
-### 2. Android Companion App
+1. Download **`PushBridge-v3.0.0.apk`** from [Releases](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v3.0.0) or copy from `releases/PushBridge-v3.0.0.apk`.
+2. On your Android phone or Samsung Galaxy Tab S7:
+   - Allow installation from unknown sources if prompted.
+   - Launch **PushBridge**.
+   - Tap **Enable Notification Access** and allow PushBridge.
+   - On the primary phone, allow SMS, Phone, and Contacts permissions.
+   - On Wi-Fi-only tablets, the app detects tablet mode automatically and runs in peer-sync receiver mode.
 
-#### Option A: Direct Installation (Recommended)
-You can directly download the pre-compiled APK from the official GitHub Release:
-- **Direct APK Download**: [PushBridge-v2.5.0.apk](https://github.com/damacbigv/pushbullet-bridge/releases/download/v2.5.0/PushBridge-v2.5.0.apk)
-- **Release Page**: [PushBridge v2.5.0 Release](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v2.5.0)
-- **Install via ADB**:
-  ```bash
-  adb install -r releases/PushBridge-v2.5.0.apk
-  ```
-*(Tip: On Android, open the release download link in **Chrome** rather than the GitHub app, as mobile in-app webviews block direct APK package downloads).*
+### 3. Relay Server (Optional Local/Self-Hosted Sync)
 
-#### Option B: Build from Source
-```bash
-cd android-app
-./gradlew assembleDebug
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-```
-
-#### First-Time Phone Permissions Setup:
-1. Open **PushBridge** on your phone.
-2. Grant runtime permissions when prompted:
-   - **Notification Access**: Grants `PushBridge Notification Interceptor` permission to read notifications and execute native RemoteInput replies.
-   - **SMS & Contacts Permissions**: Tap **"Grant SMS Permissions"** to allow `READ_SMS`, `SEND_SMS`, `RECEIVE_MMS`, and `READ_CONTACTS`.
-3. Tap **"Sync Full SMS Threads to Firebase"**.
-4. The background presence engine will mark the device `ONLINE` and automatically synchronize all conversation threads, group chats, and address book identities to the Chrome Extension.
-
----
-
-### 3. Optional Local Express Relay Server
-
-For local fallback HTTP sync without connecting directly through the browser:
 ```bash
 cd relay-server
 npm install
-npm start
+npm run start
 ```
-The relay server will run on port `5050`.
+Default port: `http://localhost:3000`.
+
+---
+
+## License
+
+MIT License. Designed for private, self-hosted cross-platform notification and SMS synchronization.
