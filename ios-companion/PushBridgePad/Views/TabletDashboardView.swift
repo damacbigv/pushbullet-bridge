@@ -147,11 +147,10 @@ struct ThreadRow: View {
                         .font(.system(size: 14, weight: .semibold))
                         .lineLimit(1)
                     Spacer()
-                    let timeInfo = formatThreadListTimestamp(thread.lastTimestamp)
-                    Text(timeInfo.display)
+                    let timeStr = formatThreadListTimestamp(thread.lastTimestamp)
+                    Text(timeStr)
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundColor(.secondary)
-                        .help(timeInfo.full)
                     if thread.isGroup {
                         Text("Group")
                             .font(.system(size: 9, weight: .bold))
@@ -285,10 +284,10 @@ struct MediaLightboxView: View {
 }
 
 /**
- Context-Aware Thread List Timestamp Formatter (Today: time only, Older: day of week + month + year, Tooltip: full precision)
+ Context-Aware Thread List Timestamp Formatter (Today: time only, Older: day of week + month + year)
  */
-func formatThreadListTimestamp(_ timestamp: Int64) -> (display: String, full: String) {
-    guard timestamp > 0 else { return ("", "") }
+func formatThreadListTimestamp(_ timestamp: Int64) -> String {
+    guard timestamp > 0 else { return "" }
     let date = Date(timeIntervalSince1970: TimeInterval(timestamp) / 1000.0)
     let isToday = Calendar.current.isDateInToday(date)
     
@@ -300,9 +299,5 @@ func formatThreadListTimestamp(_ timestamp: Int64) -> (display: String, full: St
         displayFormatter.dateFormat = "EEE, MMM yyyy"
     }
     
-    let fullFormatter = DateFormatter()
-    fullFormatter.dateStyle = .full
-    fullFormatter.timeStyle = .medium
-    
-    return (displayFormatter.string(from: date), fullFormatter.string(from: date))
+    return displayFormatter.string(from: date)
 }

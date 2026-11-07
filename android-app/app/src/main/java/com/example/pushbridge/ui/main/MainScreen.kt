@@ -431,8 +431,6 @@ private fun SmsBridgeCard(
 
 @Composable
 private fun ConversationThreadsPreviewCard(context: Context) {
-    var activeTooltip by remember { mutableStateOf<String?>(null) }
-
     val sampleThreads = remember {
         listOf(
             Triple("Alice Cooper", "Are we still on for lunch today?", System.currentTimeMillis() - 1000 * 60 * 12),
@@ -468,7 +466,7 @@ private fun ConversationThreadsPreviewCard(context: Context) {
                 }
             }
             Text(
-                "Precision timestamps: Current calendar date shows time only; older dates display day of week, month, and year. Tap or hover over any timestamp to inspect full precision details.",
+                "Context-aware timestamps: Current calendar date shows time only; older dates display day of week, month, and year.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
             )
@@ -481,14 +479,11 @@ private fun ConversationThreadsPreviewCard(context: Context) {
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 sampleThreads.forEachIndexed { index, (sender, snippet, timestamp) ->
-                    val timeInfo = DateTimeUtils.formatThreadTimestamp(timestamp)
+                    val timeStr = DateTimeUtils.formatThreadTimestamp(timestamp)
 
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable {
-                                activeTooltip = "$sender • ${timeInfo.fullTooltip}"
-                            }
                             .padding(vertical = 4.dp, horizontal = 4.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
@@ -504,7 +499,7 @@ private fun ConversationThreadsPreviewCard(context: Context) {
                             border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF0EA5E9).copy(alpha = 0.3f))
                         ) {
                             Text(
-                                text = timeInfo.display,
+                                text = timeStr,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                                 fontSize = 10.sp,
                                 fontFamily = FontFamily.Monospace,
@@ -516,22 +511,6 @@ private fun ConversationThreadsPreviewCard(context: Context) {
                     if (index < sampleThreads.size - 1) {
                         HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
                     }
-                }
-            }
-
-            activeTooltip?.let { hint ->
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = Color(0xFF0F172A),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.4f)),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        text = "🕒 Full Timestamp: $hint",
-                        modifier = Modifier.padding(8.dp),
-                        fontSize = 11.sp,
-                        color = Color(0xFFBAE6FD)
-                    )
                 }
             }
         }

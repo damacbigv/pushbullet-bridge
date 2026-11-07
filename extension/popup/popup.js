@@ -21,7 +21,6 @@ let newChatRecipient = '';
 let selectedChatAttachment = null;
 let collapsedBundles = new Set();
 let phoneIsOnline = true;
-let searchAutocomplete = null;
 let composeAutocomplete = null;
 let currentThreadLimit = 30; // 30 | 50 | 100
 let currentSearchQuery = '';
@@ -672,7 +671,6 @@ class ContactAutocomplete {
 // =============================================================
 function setupThreadedSms() {
   const searchInput = document.getElementById('sms-search-input');
-  const searchPopover = document.getElementById('contacts-autocomplete-popover');
   const btnClearSearch = document.getElementById('btn-clear-sms-search');
   const feedbackStrip = document.getElementById('sms-search-feedback-strip');
   const btnNewChat = document.getElementById('btn-new-chat');
@@ -702,7 +700,7 @@ function setupThreadedSms() {
     });
   });
 
-  // 2. In-Memory Quick Text Search across all loaded message bodies
+  // 2. In-Memory Quick Text Search across contacts, names, phone numbers, and all loaded message bodies
   let searchDebounceTimer = null;
   searchInput?.addEventListener('input', () => {
     clearTimeout(searchDebounceTimer);
@@ -719,6 +717,17 @@ function setupThreadedSms() {
     }, 50);
   });
 
+  searchInput?.addEventListener('keydown', async (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      if (searchInput) searchInput.value = '';
+      currentSearchQuery = '';
+      btnClearSearch?.classList.add('hidden');
+      feedbackStrip?.classList.add('hidden');
+      await loadSmsThreads();
+    }
+  });
+
   btnClearSearch?.addEventListener('click', async () => {
     if (searchInput) searchInput.value = '';
     currentSearchQuery = '';
@@ -727,32 +736,7 @@ function setupThreadedSms() {
     await loadSmsThreads();
   });
 
-  // 3. Sidebar Search Autocomplete (for quick contact discovery)
-  searchAutocomplete = new ContactAutocomplete(searchInput, searchPopover, async (contact) => {
-    if (searchInput) searchInput.value = '';
-    currentSearchQuery = '';
-    btnClearSearch?.classList.add('hidden');
-    feedbackStrip?.classList.add('hidden');
-
-    const { smsThreads = {} } = await chrome.storage.local.get('smsThreads');
-    const targetDigits = contact.cleanDigits || normalizePhoneNumber(contact.phone);
-
-    // Look for matching existing thread
-    const existingThread = Object.values(smsThreads).find(t => {
-      const addrDigits = normalizePhoneNumber(t.address);
-      return addrDigits.includes(targetDigits) || targetDigits.includes(addrDigits);
-    });
-
-    if (existingThread) {
-      activeThreadId = String(existingThread.threadId);
-      document.getElementById('new-recipient-bar')?.classList.add('hidden');
-      await loadSmsThreads();
-    } else {
-      startNewConversation(contact.phone, contact.name);
-    }
-  });
-
-  // 4. Compose View Recipient Autocomplete
+  // 3. Compose View Recipient Autocomplete
   composeAutocomplete = new ContactAutocomplete(newRecipientInput, composePopover, (contact) => {
     newRecipientInput.value = contact.phone;
     newChatRecipient = contact.phone;
@@ -991,27 +975,69 @@ async function loadSmsThreads() {
 
   // In-Memory Quick Text Search: real-time filtering across contacts, numbers, snippets, and all loaded message bodies
   let filteredList = allThreadsList;
-  let matchCount = 0;
 
   if (currentSearchQuery) {
-    const qLower = currentSearchQuery.toLowerCase();
+    const {
+      googleContactsCache = [],
+      deviceContactsCache = {}
+    } = await chrome.storage.local.get(['googleContactsCache', 'deviceContactsCache']);
+
+    const deviceList = Array.isArray(deviceContactsCache)
+      ? deviceContactsCache
+      : Object.values(deviceContactsCache);
+
+    const qLower = currentSearchQuery.toLowerCase().trim();
+    const terms = qLower.split(/\s+/).filter(Boolean);
+    const queryDigits = currentSearchQuery.replace(/\D/g, '');
+
     filteredList = allThreadsList.filter(t => {
-      const nameMatch = (t.contactName || '').toLowerCase().includes(qLower) ||
-                        (t.groupTitle || '').toLowerCase().includes(qLower);
-      const addrMatch = (t.address || '').toLowerCase().includes(qLower) ||
-                        normalizePhoneNumber(t.address || '').includes(normalizePhoneNumber(currentSearchQuery));
-      const snippetMatch = (t.snippet || '').toLowerCase().includes(qLower);
-      const msgs = t.messages ? Object.values(t.messages) : [];
-      const msgMatch = msgs.some(m => (m.body || '').toLowerCase().includes(qLower) ||
-                                      (m.contactName || '').toLowerCase().includes(qLower));
-      const matched = nameMatch || addrMatch || snippetMatch || msgMatch;
-      if (matched) matchCount++;
-      return matched;
+      // 1. Resolve contact display name and address details
+      const iden = resolveContactIdentity(t.address, googleContactsCache, deviceList);
+      const resolvedName = (iden && iden.name) ? iden.name.toLowerCase() : '';
+      const contactName = (t.contactName || '').toLowerCase();
+      const groupTitle = (t.groupTitle || '').toLowerCase();
+      const address = (t.address || '').toLowerCase();
+      const snippet = (t.snippet || '').toLowerCase();
+
+      // 2. Recipients (for group or multi-recipient threads)
+      const recips = t.recipients || [];
+      const recipTexts = recips.map(r => {
+        if (typeof r === 'object' && r) {
+          const rIden = resolveContactIdentity(r.phone || r.cleanDigits || '', googleContactsCache, deviceList);
+          return `${r.name || ''} ${r.phone || ''} ${rIden.name || ''}`.toLowerCase();
+        }
+        return String(r).toLowerCase();
+      }).join(' ');
+
+      // 3. Deep message bodies in memory
+      const msgs = Array.isArray(t.messages) ? t.messages : Object.values(t.messages || {});
+      const msgTexts = msgs.map(m => {
+        const body = (m.body || m.text || '').toLowerCase();
+        const mSender = (m.contactName || '').toLowerCase();
+        const mAddr = (m.address || m.sender || '').toLowerCase();
+        return `${body} ${mSender} ${mAddr}`;
+      }).join(' ');
+
+      // 4. Combined searchable text corpus for this thread
+      const threadCorpus = `${contactName} ${resolvedName} ${groupTitle} ${address} ${snippet} ${recipTexts} ${msgTexts}`;
+
+      // Check if text terms match (all terms in multi-word query or exact phrase)
+      const textMatch = threadCorpus.includes(qLower) ||
+                        (terms.length > 0 && terms.every(term => threadCorpus.includes(term)));
+
+      // 5. Phone number digit matching (only when query has at least 2 digits)
+      let digitMatch = false;
+      if (queryDigits.length >= 2) {
+        const threadDigits = `${address} ${recipTexts} ${msgs.map(m => m.address || m.sender || '').join(' ')}`.replace(/\D/g, '');
+        digitMatch = threadDigits.includes(queryDigits);
+      }
+
+      return textMatch || digitMatch;
     });
 
     const matchCountEl = document.getElementById('sms-search-match-count');
     if (matchCountEl) {
-      matchCountEl.textContent = `${matchCount} conversation${matchCount === 1 ? '' : 's'} matched`;
+      matchCountEl.textContent = `${filteredList.length} conversation${filteredList.length === 1 ? '' : 's'} matched`;
     }
   }
 
@@ -1039,7 +1065,9 @@ async function loadSmsThreads() {
   }
 
   // Select first thread by default if none selected or if activeThreadId is no longer present
-  if ((!activeThreadId || !filteredList.some(t => String(t.threadId) === String(activeThreadId))) && filteredList.length > 0) {
+  if (filteredList.length === 0) {
+    activeThreadId = null;
+  } else if (!activeThreadId || !filteredList.some(t => String(t.threadId) === String(activeThreadId))) {
     activeThreadId = String(filteredList[0].threadId);
   }
 
@@ -1115,7 +1143,7 @@ async function createThreadListItem(thread) {
     }
   }
 
-  const { display: timeStr, full: fullTimestampHint } = formatThreadListTimestamp(thread.lastTimestamp);
+  const timeStr = formatThreadListTimestamp(thread.lastTimestamp);
 
   // Apply real-time search keyword highlighting
   const renderedName = currentSearchQuery ? highlightKeywords(escapeHtml(displayName), currentSearchQuery) : escapeHtml(displayName);
@@ -1130,8 +1158,7 @@ async function createThreadListItem(thread) {
     <div class="flex-1 min-w-0">
       <div class="flex items-center justify-between mb-0.5">
         <h3 class="text-xs font-bold text-slate-100 truncate">${renderedName}</h3>
-        <span class="thread-timestamp-badge text-[10px] text-slate-400 hover:text-sky-300 font-mono shrink-0 ml-1 transition cursor-help border-b border-dotted border-slate-600/50"
-              title="${escapeHtml(fullTimestampHint)}">${escapeHtml(timeStr)}</span>
+        <span class="text-[10px] text-slate-500 font-mono shrink-0 ml-1 select-none">${escapeHtml(timeStr)}</span>
       </div>
       <div class="flex items-center justify-between">
         <p class="text-[11px] text-slate-400 truncate flex-1">${renderedSnippet}</p>
@@ -1187,7 +1214,23 @@ async function renderActiveConversation() {
   if (threadsList.length === 0) threadsList = getFallbackSmsThreads();
 
   const thread = threadsList.find(t => String(t.threadId) === String(activeThreadId));
-  if (!thread) return;
+  if (!thread) {
+    container.innerHTML = `
+      <div class="h-full flex flex-col items-center justify-center text-center p-6 text-slate-500">
+        <div class="w-10 h-10 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-400 mb-2">💬</div>
+        <p class="text-xs font-semibold text-slate-400">No conversation selected</p>
+        <p class="text-[11px] text-slate-600 mt-1">Select a conversation from the list or clear the search filter.</p>
+      </div>
+    `;
+    headerName.textContent = 'No Conversation Selected';
+    headerPhone.textContent = '';
+    headerAvatar.textContent = '—';
+    headerAvatar.className = 'w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-xs text-slate-500 shrink-0';
+    groupBadge.classList.add('hidden');
+    participantsContainer.classList.add('hidden');
+    broadcastNotice.classList.add('hidden');
+    return;
+  }
 
   const isGroup = !!thread.isGroup || (thread.recipients && thread.recipients.length > 1);
   const recips = thread.recipients || [];
@@ -1606,41 +1649,26 @@ function formatTimestamp(ts) {
  * Context-Aware Timestamp Formatting for SMS Thread Left-Hand Navigation Panel:
  * 1. Current calendar date (today): Displays only the time (e.g., "3:42 PM" or "15:42").
  * 2. Older than current date: Displays the day of the week combined with the month and year (e.g., "Wed, Nov 2026").
- * 3. Interactive Hover Tooltip: Provides the full, precise timestamp (exact date, hour, minute, and second).
  */
 function formatThreadListTimestamp(ts) {
-  if (!ts) return { display: '', full: '' };
+  if (!ts) return '';
   const d = new Date(ts);
-  if (isNaN(d.getTime())) return { display: '', full: '' };
+  if (isNaN(d.getTime())) return '';
 
   const now = new Date();
   const isToday = d.getFullYear() === now.getFullYear() &&
                   d.getMonth() === now.getMonth() &&
                   d.getDate() === now.getDate();
 
-  let display = '';
   if (isToday) {
     // Current calendar date: display only the time based on user locale
-    display = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   } else {
     // Older than current date: day of the week combined with month and year
     const weekday = d.toLocaleDateString([], { weekday: 'short' });
     const monthYear = d.toLocaleDateString([], { month: 'short', year: 'numeric' });
-    display = `${weekday}, ${monthYear}`;
+    return `${weekday}, ${monthYear}`;
   }
-
-  // Full, precise timestamp for interactive hover tooltip hint
-  const full = d.toLocaleString([], {
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
-  });
-
-  return { display, full };
 }
 
 function formatBytes(bytes) {
