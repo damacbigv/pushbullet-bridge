@@ -17,27 +17,31 @@ object SmsRepository {
     private const val TAG = "SmsRepository"
 
     // MMS PDU Header Address types
+    private const val MMS_ADDR_TYPE_BCC = 129
+    private const val MMS_ADDR_TYPE_CC = 130
     private const val MMS_ADDR_TYPE_FROM = 137
+    private const val MMS_ADDR_TYPE_TO = 151
 
     /**
      * Reads SMS & MMS conversations and thread histories from Android Telephony provider.
-     * Accurately detects multi-recipient group conversations via canonical addresses.
+     * Accurately aggregates multi-recipient group conversations via canonical addresses
+     * and MMS part address tables (FROM, TO, CC).
      */
     fun queryConversationThreads(
         context: Context,
         maxThreads: Int = 30,
-        maxMessagesPerThread: Int = 50
+        maxMessagesPerThread: Int = 100
     ): List<SmsConversationThread> {
         if (!PermissionUtils.hasSmsReadPermission(context)) {
             Log.w(TAG, "Cannot query SMS threads: READ_SMS permission not granted.")
             return emptyList()
         }
 
-        // Cache resolved contact names by phone number to minimize query overhead
+        // Cache resolved contact names and canonical addresses to minimize query overhead
         val contactNameCache = mutableMapOf<String, String?>()
         val canonicalAddressCache = mutableMapOf<String, String>()
 
-        // 1. First discover threads from Telephony conversations table (simple=true)
+        // 1. Discover threads from Telephony conversations table (content://mms-sms/conversations)
         val conversationMetadataMap = queryConversationMetadata(context, canonicalAddressCache)
 
         // 2. Query individual SMS messages grouped by threadId
@@ -82,15 +86,16 @@ object SmsRepository {
                     }
 
                     val id = "sms_" + c.getString(idCol)
-                    val address = c.getString(addressCol) ?: "Unknown"
+                    val rawAddr = c.getString(addressCol) ?: ""
+                    val normalizedAddr = normalizePhoneNumber(rawAddr)
                     val body = c.getString(bodyCol) ?: ""
                     val timestamp = c.getLong(dateCol)
                     val type = c.getInt(typeCol)
                     val read = c.getInt(readCol) == 1
                     val isIncoming = type == Telephony.Sms.MESSAGE_TYPE_INBOX
 
-                    if (!threadAddressesFallback.containsKey(threadId) && address.isNotBlank()) {
-                        threadAddressesFallback[threadId] = address
+                    if (!threadAddressesFallback.containsKey(threadId) && normalizedAddr.isNotBlank()) {
+                        threadAddressesFallback[threadId] = normalizedAddr
                     }
 
                     if (!read && isIncoming) {
@@ -101,7 +106,7 @@ object SmsRepository {
                         SmsMessageItem(
                             id = id,
                             threadId = threadId,
-                            address = address,
+                            address = normalizedAddr.ifBlank { "Unknown" },
                             contactName = null,
                             body = body,
                             timestamp = timestamp,
@@ -115,11 +120,16 @@ object SmsRepository {
             Log.e(TAG, "Error querying SMS content provider: ${e.message}", e)
         }
 
-        // 3. Query MMS messages (including group chats)
-        val threadMmsMap = queryMmsMessages(context, maxMessagesPerThread)
+        // 3. Query MMS messages & parse MMS part addresses (identifies all group chat participants)
+        val threadMmsParticipants = mutableMapOf<Long, MutableSet<String>>()
+        val threadMmsMap = queryMmsMessages(
+            context = context,
+            maxMessagesPerThread = maxMessagesPerThread,
+            threadMmsParticipants = threadMmsParticipants
+        )
 
         // Combine all discovered thread IDs
-        val allThreadIds = (conversationMetadataMap.keys + threadSmsMap.keys + threadMmsMap.keys)
+        val allThreadIds = (conversationMetadataMap.keys + threadSmsMap.keys + threadMmsMap.keys).toSet()
 
         val resultThreads = mutableListOf<SmsConversationThread>()
 
@@ -128,49 +138,106 @@ object SmsRepository {
             val smsList = threadSmsMap[threadId] ?: emptyList()
             val mmsList = threadMmsMap[threadId] ?: emptyList()
 
+            // Merge and sort chronologically (oldest to newest)
             val combinedMessages = (smsList + mmsList).sortedBy { it.timestamp }
-            if (combinedMessages.isEmpty() && convMeta == null) continue
+            val finalMessages = if (combinedMessages.size > maxMessagesPerThread) {
+                combinedMessages.takeLast(maxMessagesPerThread)
+            } else {
+                combinedMessages
+            }
 
-            val isGroup: Boolean
+            if (finalMessages.isEmpty() && convMeta == null) continue
+
+            // 4. Multi-Member Participant Aggregation:
+            // Combines addresses from Telephony canonical-addresses AND MMS part addresses (FROM, TO, CC)
+            val aggregatedParticipants = mutableSetOf<String>()
+
+            // Add metadata recipients
+            if (convMeta != null && convMeta.recipients.isNotEmpty()) {
+                convMeta.recipients.forEach { recip ->
+                    val clean = normalizePhoneNumber(recip)
+                    if (clean.isNotBlank()) aggregatedParticipants.add(clean)
+                }
+            }
+
+            // Add MMS participants (captures family threads with multiple members)
+            val mmsAddrs = threadMmsParticipants[threadId]
+            if (!mmsAddrs.isNullOrEmpty()) {
+                mmsAddrs.forEach { recip ->
+                    val clean = normalizePhoneNumber(recip)
+                    if (clean.isNotBlank()) aggregatedParticipants.add(clean)
+                }
+            }
+
+            // Fallback to SMS address if participant list is empty
+            val smsFallback = threadAddressesFallback[threadId]
+            if (aggregatedParticipants.isEmpty() && !smsFallback.isNullOrBlank()) {
+                val clean = normalizePhoneNumber(smsFallback)
+                if (clean.isNotBlank()) aggregatedParticipants.add(clean)
+            }
+
+            if (aggregatedParticipants.isEmpty() && finalMessages.isNotEmpty()) {
+                finalMessages.forEach { msg ->
+                    if (msg.address != "Me" && msg.address != "Unknown") {
+                        val clean = normalizePhoneNumber(msg.address)
+                        if (clean.isNotBlank()) aggregatedParticipants.add(clean)
+                    }
+                }
+            }
+
+            // 5. Determine whether this is a multi-recipient group thread
+            val isGroup = aggregatedParticipants.size > 1 || (convMeta != null && convMeta.recipients.size > 1)
             val recipientsList = mutableListOf<Map<String, String>>()
-            var groupTitle: String? = null
+            val groupTitle: String?
             val rawAddress: String
 
-            if (convMeta != null && convMeta.recipients.size > 1) {
-                // Multi-recipient group conversation detected
-                isGroup = true
-                rawAddress = convMeta.recipients.joinToString(", ")
-                for (recipPhone in convMeta.recipients) {
-                    val contactName = contactNameCache.getOrPut(recipPhone) {
-                        resolveContactName(context, recipPhone)
+            if (isGroup) {
+                for (phone in aggregatedParticipants) {
+                    val contactName = contactNameCache.getOrPut(phone) {
+                        resolveContactName(context, phone)
                     }
-                    val cleanDigits = recipPhone.replace(Regex("\\D"), "")
+                    val cleanDigits = phone.replace(Regex("\\D"), "")
                     recipientsList.add(
                         mapOf(
-                            "phone" to recipPhone,
-                            "name" to (contactName ?: recipPhone),
+                            "phone" to phone,
+                            "name" to (contactName ?: phone),
                             "cleanDigits" to cleanDigits
                         )
                     )
                 }
+
+                // Sort recipients alphabetically by name for a consistent group title
+                recipientsList.sortBy { it["name"] ?: it["phone"] ?: "" }
                 groupTitle = recipientsList.joinToString(", ") { it["name"] ?: it["phone"] ?: "" }
-            } else if (convMeta != null && convMeta.recipients.isNotEmpty()) {
-                isGroup = false
-                rawAddress = convMeta.recipients.first()
+                rawAddress = recipientsList.joinToString(", ") { it["phone"] ?: "" }
             } else {
-                rawAddress = threadAddressesFallback[threadId] ?: combinedMessages.firstOrNull()?.address ?: "Unknown"
-                isGroup = false
+                val singlePhone = aggregatedParticipants.firstOrNull() ?: threadAddressesFallback[threadId] ?: "Unknown"
+                rawAddress = singlePhone
+                groupTitle = null
+                if (singlePhone != "Unknown") {
+                    val contactName = contactNameCache.getOrPut(singlePhone) {
+                        resolveContactName(context, singlePhone)
+                    }
+                    val cleanDigits = singlePhone.replace(Regex("\\D"), "")
+                    recipientsList.add(
+                        mapOf(
+                            "phone" to singlePhone,
+                            "name" to (contactName ?: singlePhone),
+                            "cleanDigits" to cleanDigits
+                        )
+                    )
+                }
             }
 
-            val contactName = if (!isGroup) {
+            val contactName = if (isGroup) {
+                groupTitle
+            } else {
                 contactNameCache.getOrPut(rawAddress) {
                     resolveContactName(context, rawAddress)
                 }
-            } else {
-                groupTitle
             }
 
-            val latestMessage = combinedMessages.lastOrNull()
+            val latestMessage = finalMessages.lastOrNull()
             val lastTimestamp = latestMessage?.timestamp
                 ?: convMeta?.date
                 ?: System.currentTimeMillis()
@@ -178,12 +245,14 @@ object SmsRepository {
                 ?: convMeta?.snippet
                 ?: ""
 
-            // Build map of messages for Firebase RTDB with contact names resolved
-            val messagesMap = combinedMessages.associate { msg ->
-                val msgContact = if (msg.isIncoming) {
+            // 6. Build map of messages for Firebase RTDB with contact names resolved per bubble
+            val messagesMap = finalMessages.associate { msg ->
+                val msgContact = if (msg.isIncoming && msg.address != "Me" && msg.address != "Unknown") {
                     contactNameCache.getOrPut(msg.address) {
                         resolveContactName(context, msg.address)
                     }
+                } else if (!msg.isIncoming) {
+                    "Me"
                 } else null
 
                 val enriched = msg.copy(contactName = msgContact)
@@ -211,16 +280,20 @@ object SmsRepository {
     }
 
     /**
-     * Reads conversations metadata from `content://mms-sms/conversations?simple=true`.
-     * Maps thread recipient IDs to actual phone numbers via canonical addresses.
+     * Reads conversations metadata from `content://mms-sms/conversations?simple=true`
+     * with fallback to `Telephony.Threads.CONTENT_URI`.
+     * Pre-populates canonical addresses in bulk to reliably resolve recipient IDs.
      */
     private fun queryConversationMetadata(
         context: Context,
         canonicalAddressCache: MutableMap<String, String>
     ): Map<Long, ConversationMetadata> {
         val map = mutableMapOf<Long, ConversationMetadata>()
-        val uri = Uri.parse("content://mms-sms/conversations?simple=true")
 
+        // Pre-populate canonical addresses in one bulk query
+        loadAllCanonicalAddresses(context, canonicalAddressCache)
+
+        val uri = Uri.parse("content://mms-sms/conversations?simple=true")
         try {
             val cursor = context.contentResolver.query(
                 uri,
@@ -268,11 +341,99 @@ object SmsRepository {
             Log.d(TAG, "Conversation simple=true query not supported or failed: ${e.message}")
         }
 
+        // Fallback to Telephony.Threads.CONTENT_URI if simple=true query returned empty
+        if (map.isEmpty()) {
+            try {
+                val fallbackUri = Telephony.Threads.CONTENT_URI
+                val cursor = context.contentResolver.query(
+                    fallbackUri,
+                    arrayOf("_id", "date", "message_count", "recipient_ids", "snippet", "read"),
+                    null,
+                    null,
+                    "date DESC"
+                )
+
+                cursor?.use { c ->
+                    val idCol = c.getColumnIndex("_id")
+                    val dateCol = c.getColumnIndex("date")
+                    val countCol = c.getColumnIndex("message_count")
+                    val recipCol = c.getColumnIndex("recipient_ids")
+                    val snippetCol = c.getColumnIndex("snippet")
+                    val readCol = c.getColumnIndex("read")
+
+                    while (c.moveToNext()) {
+                        if (idCol == -1) break
+                        val threadId = c.getLong(idCol)
+                        val date = if (dateCol != -1) c.getLong(dateCol) else System.currentTimeMillis()
+                        val count = if (countCol != -1) c.getInt(countCol) else 0
+                        val recipIdsRaw = if (recipCol != -1) c.getString(recipCol) ?: "" else ""
+                        val snippet = if (snippetCol != -1) c.getString(snippetCol) ?: "" else ""
+                        val read = if (readCol != -1) c.getInt(readCol) == 1 else true
+
+                        val recipientIds = recipIdsRaw.split(" ").filter { it.isNotBlank() }
+                        val phoneNumbers = recipientIds.mapNotNull { recipId ->
+                            canonicalAddressCache.getOrPut(recipId) {
+                                resolveCanonicalAddress(context, recipId) ?: ""
+                            }.takeIf { it.isNotBlank() }
+                        }
+
+                        map[threadId] = ConversationMetadata(
+                            threadId = threadId,
+                            date = date,
+                            messageCount = count,
+                            recipients = phoneNumbers,
+                            snippet = snippet,
+                            unreadCount = if (!read) 1 else 0
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "Telephony.Threads fallback query failed: ${e.message}")
+            }
+        }
+
         return map
     }
 
     /**
-     * Resolves a Telephony recipient_id to a phone number via canonical addresses.
+     * Loads all canonical recipient IDs to phone numbers in one bulk query.
+     */
+    private fun loadAllCanonicalAddresses(
+        context: Context,
+        cache: MutableMap<String, String>
+    ) {
+        try {
+            val uri = Uri.parse("content://mms-sms/canonical-addresses")
+            val cursor = context.contentResolver.query(
+                uri,
+                arrayOf("_id", "address"),
+                null,
+                null,
+                null
+            )
+            cursor?.use { c ->
+                val idCol = c.getColumnIndex("_id")
+                val addrCol = c.getColumnIndex("address")
+                while (c.moveToNext()) {
+                    if (idCol != -1 && addrCol != -1) {
+                        val id = c.getString(idCol)
+                        val addr = c.getString(addrCol)
+                        if (!id.isNullOrBlank() && !addr.isNullOrBlank()) {
+                            val clean = normalizePhoneNumber(addr)
+                            if (clean.isNotBlank()) {
+                                cache[id] = clean
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.d(TAG, "Bulk canonical-addresses query not available: ${e.message}")
+        }
+    }
+
+    /**
+     * Resolves a Telephony recipient_id to a phone number via canonical addresses fallback.
      */
     private fun resolveCanonicalAddress(context: Context, recipientId: String): String? {
         val uri = Uri.parse("content://mms-sms/canonical-address/$recipientId")
@@ -280,7 +441,8 @@ object SmsRepository {
             val cursor = context.contentResolver.query(uri, null, null, null, null)
             cursor?.use { c ->
                 if (c.moveToFirst()) {
-                    c.getString(0)
+                    val raw = c.getString(0)
+                    normalizePhoneNumber(raw).takeIf { it.isNotBlank() }
                 } else null
             }
         } catch (e: Exception) {
@@ -290,11 +452,12 @@ object SmsRepository {
     }
 
     /**
-     * Queries MMS messages for rich group chat text bodies and senders.
+     * Queries MMS messages for rich group chat text bodies, image parts, and participant addresses.
      */
     private fun queryMmsMessages(
         context: Context,
-        maxMessagesPerThread: Int
+        maxMessagesPerThread: Int,
+        threadMmsParticipants: MutableMap<Long, MutableSet<String>>
     ): Map<Long, List<SmsMessageItem>> {
         val mmsMap = mutableMapOf<Long, MutableList<SmsMessageItem>>()
         val uri = Uri.parse("content://mms")
@@ -330,14 +493,24 @@ object SmsRepository {
                     val read = if (readCol != -1) c.getInt(readCol) == 1 else true
                     val isIncoming = msgBox == 1 // 1 = inbox, 2 = sent
 
+                    // Parse MMS addresses: extracts sender and group participants
+                    val addrDetails = queryMmsAddresses(context, mmsId)
+                    if (addrDetails.allParticipants.isNotEmpty()) {
+                        threadMmsParticipants.getOrPut(threadId) { mutableSetOf() }.addAll(addrDetails.allParticipants)
+                    }
+
                     val mmsContent = getMmsContent(context, mmsId)
-                    val sender = if (isIncoming) getMmsSender(context, mmsId) ?: "Group Member" else "Me"
+                    val senderAddress = if (isIncoming) {
+                        addrDetails.sender ?: "Unknown"
+                    } else {
+                        "Me"
+                    }
 
                     list.add(
                         SmsMessageItem(
                             id = "mms_$mmsId",
                             threadId = threadId,
-                            address = sender,
+                            address = senderAddress,
                             contactName = null,
                             body = mmsContent.text,
                             timestamp = timestamp,
@@ -354,6 +527,67 @@ object SmsRepository {
         }
 
         return mmsMap
+    }
+
+    private data class MmsAddressDetails(
+        val sender: String?,
+        val recipients: List<String>,
+        val allParticipants: Set<String>
+    )
+
+    /**
+     * Parses MMS addresses from `content://mms/{mmsId}/addr`.
+     * Identifies sender (type=137) and recipients (type=151, 130, 129),
+     * filtering out insert-address-token placeholders.
+     */
+    private fun queryMmsAddresses(context: Context, mmsId: Long): MmsAddressDetails {
+        val uri = Uri.parse("content://mms/$mmsId/addr")
+        val recipients = mutableListOf<String>()
+        var sender: String? = null
+        val allParticipants = mutableSetOf<String>()
+
+        try {
+            val cursor = context.contentResolver.query(
+                uri,
+                arrayOf("address", "type"),
+                null,
+                null,
+                null
+            )
+            cursor?.use { c ->
+                val addrCol = c.getColumnIndex("address")
+                val typeCol = c.getColumnIndex("type")
+
+                while (c.moveToNext()) {
+                    val rawAddr = if (addrCol != -1) c.getString(addrCol) else null
+                    val type = if (typeCol != -1) c.getInt(typeCol) else 0
+
+                    if (rawAddr.isNullOrBlank() || rawAddr.equals("insert-address-token", ignoreCase = true)) {
+                        continue
+                    }
+
+                    val cleanPhone = normalizePhoneNumber(rawAddr)
+                    if (cleanPhone.isBlank()) continue
+
+                    allParticipants.add(cleanPhone)
+
+                    when (type) {
+                        MMS_ADDR_TYPE_FROM -> {
+                            if (sender == null) sender = cleanPhone
+                        }
+                        MMS_ADDR_TYPE_TO, MMS_ADDR_TYPE_CC, MMS_ADDR_TYPE_BCC -> {
+                            if (!recipients.contains(cleanPhone)) {
+                                recipients.add(cleanPhone)
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.d(TAG, "Failed querying MMS addresses for mmsId $mmsId: ${e.message}")
+        }
+
+        return MmsAddressDetails(sender, recipients, allParticipants)
     }
 
     private data class MmsContentResult(
@@ -386,7 +620,6 @@ object SmsRepository {
                 val idCol = c.getColumnIndex("_id")
                 val ctCol = c.getColumnIndex("ct")
                 val textCol = c.getColumnIndex("text")
-                val dataCol = c.getColumnIndex("_data")
 
                 val sb = StringBuilder()
 
@@ -453,25 +686,6 @@ object SmsRepository {
         }
 
         return MmsContentResult(textBody, attachmentData, attachmentMime)
-    }
-
-    /**
-     * Retrieves the sender phone number for an incoming MMS.
-     */
-    private fun getMmsSender(context: Context, mmsId: Long): String? {
-        val uri = Uri.parse("content://mms/$mmsId/addr")
-        val selection = "type = $MMS_ADDR_TYPE_FROM"
-
-        return try {
-            val cursor = context.contentResolver.query(uri, arrayOf("address"), selection, null, null)
-            cursor?.use { c ->
-                if (c.moveToFirst()) {
-                    c.getString(0)
-                } else null
-            }
-        } catch (e: Exception) {
-            null
-        }
     }
 
     /**
@@ -559,6 +773,22 @@ object SmsRepository {
         }
 
         return list
+    }
+
+    /**
+     * Standardizes phone numbers to clean digits / E.164 format and filters placeholder tokens.
+     */
+    fun normalizePhoneNumber(raw: String?): String {
+        if (raw.isNullOrBlank()) return ""
+        val trimmed = raw.trim()
+        if (trimmed.equals("insert-address-token", ignoreCase = true)) return ""
+        if (trimmed.startsWith("mailto:", ignoreCase = true)) return ""
+
+        val digits = trimmed.replace(Regex("\\D"), "")
+        if (digits.length >= 10) {
+            return if (trimmed.startsWith("+")) trimmed else if (digits.length == 10) "+1$digits" else "+$digits"
+        }
+        return trimmed
     }
 
     private data class ConversationMetadata(

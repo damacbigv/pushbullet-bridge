@@ -952,7 +952,7 @@ async function loadSmsThreads() {
     updatePaginationUI(currentThreadLimit);
   }
 
-  let allThreadsList = Object.values(smsThreads);
+  let allThreadsList = Object.values(smsThreads || {}).filter(t => t && typeof t === 'object' && t.threadId !== undefined);
 
   if (allThreadsList.length === 0) {
     try {
@@ -963,7 +963,7 @@ async function loadSmsThreads() {
       });
       if (res && res.threads) {
         smsThreads = res.threads;
-        allThreadsList = Object.values(smsThreads);
+        allThreadsList = Object.values(smsThreads || {}).filter(t => t && typeof t === 'object' && t.threadId !== undefined);
       }
     } catch {}
   }
@@ -1210,7 +1210,7 @@ async function renderActiveConversation() {
     ? deviceContactsCache
     : Object.values(deviceContactsCache);
 
-  let threadsList = Object.values(smsThreads);
+  let threadsList = Object.values(smsThreads || {}).filter(t => t && typeof t === 'object' && t.threadId !== undefined);
   if (threadsList.length === 0) threadsList = getFallbackSmsThreads();
 
   const thread = threadsList.find(t => String(t.threadId) === String(activeThreadId));

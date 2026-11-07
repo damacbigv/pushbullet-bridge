@@ -457,7 +457,7 @@ private fun ConversationThreadsPreviewCard(context: Context) {
                     border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF0EA5E9))
                 ) {
                     Text(
-                        "v3.0.1",
+                        "v3.0.2",
                         modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
