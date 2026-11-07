@@ -1371,19 +1371,35 @@ async function renderUrlPreviewCard(url, containerId) {
     if (!slot || !res || !res.success || !res.preview) return;
 
     const preview = res.preview;
-    slot.innerHTML = `
-      <a href="${escapeHtml(preview.url)}" target="_blank" rel="noopener noreferrer" class="block rounded-xl border border-slate-700/60 bg-slate-900/90 hover:bg-slate-800/90 transition overflow-hidden text-left shadow-sm">
-        ${preview.image ? `<img src="${escapeHtml(preview.image)}" class="w-full h-28 object-cover border-b border-slate-800" alt="${escapeHtml(preview.title || '')}" onerror="this.remove()">` : ''}
-        <div class="p-2 space-y-0.5">
-          <div class="flex items-center gap-1.5 text-[10px] text-slate-400 font-mono">
-            <span>🔗</span>
-            <span class="truncate">${escapeHtml(preview.domain || preview.siteName || '')}</span>
-          </div>
-          <p class="text-[11px] font-bold text-slate-100 line-clamp-1 leading-snug">${escapeHtml(preview.title || preview.domain || '')}</p>
-          ${preview.description ? `<p class="text-[10px] text-slate-400 line-clamp-2 leading-relaxed">${escapeHtml(preview.description)}</p>` : ''}
-        </div>
-      </a>
+    const cardLink = document.createElement('a');
+    cardLink.href = preview.url;
+    cardLink.target = '_blank';
+    cardLink.rel = 'noopener noreferrer';
+    cardLink.className = 'block rounded-xl border border-slate-700/60 bg-slate-900/90 hover:bg-slate-800/90 transition overflow-hidden text-left shadow-sm';
+
+    if (preview.image) {
+      const img = document.createElement('img');
+      img.src = preview.image;
+      img.className = 'w-full h-28 object-cover border-b border-slate-800';
+      img.alt = preview.title || '';
+      img.addEventListener('error', () => img.remove());
+      cardLink.appendChild(img);
+    }
+
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'p-2 space-y-0.5';
+    contentDiv.innerHTML = `
+      <div class="flex items-center gap-1.5 text-[10px] text-slate-400 font-mono">
+        <span>🔗</span>
+        <span class="truncate">${escapeHtml(preview.domain || preview.siteName || '')}</span>
+      </div>
+      <p class="text-[11px] font-bold text-slate-100 line-clamp-1 leading-snug">${escapeHtml(preview.title || preview.domain || '')}</p>
+      ${preview.description ? `<p class="text-[10px] text-slate-400 line-clamp-2 leading-relaxed">${escapeHtml(preview.description)}</p>` : ''}
     `;
+    cardLink.appendChild(contentDiv);
+
+    slot.innerHTML = '';
+    slot.appendChild(cardLink);
   } catch (e) {
     // Graceful fallback: silently leave just the clickable text link
   }
