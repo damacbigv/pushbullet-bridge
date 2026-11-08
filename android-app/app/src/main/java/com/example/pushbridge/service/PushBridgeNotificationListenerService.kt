@@ -90,24 +90,43 @@ class PushBridgeNotificationListenerService : NotificationListenerService() {
             override fun onChange(selfChange: Boolean, uri: Uri?) {
                 super.onChange(selfChange, uri)
                 val now = System.currentTimeMillis()
-                if (now - lastTrigger > 1500L) {
+                if (now - lastTrigger > 800L) {
                     lastTrigger = now
                     Log.d(TAG, "Telephony SMS/MMS change detected via ContentObserver ($uri). Auto-syncing threads...")
+
+                    // Fast single thread sync if URI contains conversation ID
+                    val seg = uri?.lastPathSegment
+                    val targetThreadId = seg?.toLongOrNull()
+                    if (targetThreadId != null && targetThreadId > 0) {
+                        PushBridgeFirebaseManager.syncSingleThread(applicationContext, targetThreadId)
+                    }
+
                     PushBridgeFirebaseManager.syncAllSmsThreads(applicationContext)
+
+                    // Secondary delayed sync for asynchronous MMS attachment downloading
+                    handler.postDelayed({
+                        PushBridgeFirebaseManager.syncAllSmsThreads(applicationContext)
+                    }, 2200L)
                 }
             }
         }
 
-        try {
-            contentResolver.registerContentObserver(
-                Uri.parse("content://mms-sms/"),
-                true,
-                telephonyObserver as ContentObserver
-            )
-            Log.i(TAG, "Registered Telephony SMS/MMS ContentObserver for real-time thread synchronization.")
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed registering Telephony ContentObserver: ${e.message}")
+        val urisToObserve = listOf(
+            Uri.parse("content://mms-sms/"),
+            android.provider.Telephony.Mms.CONTENT_URI,
+            android.provider.Telephony.Sms.CONTENT_URI,
+            android.provider.Telephony.MmsSms.CONTENT_CONVERSATIONS_URI,
+            android.provider.Telephony.Threads.CONTENT_URI
+        )
+
+        for (u in urisToObserve) {
+            try {
+                contentResolver.registerContentObserver(u, true, telephonyObserver as ContentObserver)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed registering Telephony observer for $u: ${e.message}")
+            }
         }
+        Log.i(TAG, "Registered Telephony SMS/MMS ContentObservers for real-time group & SMS synchronization.")
     }
 
     override fun onListenerDisconnected() {

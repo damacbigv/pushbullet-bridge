@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PushBridge - Notification & SMS Sync",
-  "version": "3.0.2",
+  "version": "3.0.3",
   "description": "Cross-platform real-time notification, threaded SMS & group chat bridge, inline media previews, quick text search, and multi-device tablet sync.",
   "icons": {
     "16": "icons/icon-16.png",

@@ -322,39 +322,78 @@ async function handleIncomingClipboard(clip, sourceDeviceId) {
 }
 
 /**
+ * Normalizes threads map whether received as an Object or sparse Array from Firebase.
+ */
+function normalizeThreadsMap(raw) {
+  if (!raw || typeof raw !== 'object') return {};
+  const map = {};
+  if (Array.isArray(raw)) {
+    raw.forEach((item, idx) => {
+      if (item && typeof item === 'object') {
+        const id = item.threadId ? String(item.threadId) : String(idx);
+        map[id] = item;
+      }
+    });
+  } else {
+    for (const [key, val] of Object.entries(raw)) {
+      if (val && typeof val === 'object') {
+        map[key] = val;
+      }
+    }
+  }
+  return map;
+}
+
+/**
  * Handles incoming threaded SMS conversations from Android phone.
  */
 async function handleIncomingSmsThreads(data, path, sourceDeviceId) {
   if (!data) return;
 
   const { smsThreads = {} } = await chrome.storage.local.get('smsThreads');
-  const parts = path.split('/').filter(Boolean); // ['android_xyz', 'sms_threads', '12', ...]
+  const parts = path.split('/').filter(Boolean);
+  const smsIdx = parts.indexOf('sms_threads');
 
   let updatedThreads = { ...smsThreads };
 
-  if (parts.length === 2) {
-    // Whole map of threads updated
-    updatedThreads = { ...smsThreads, ...data };
-  } else if (parts.length >= 3) {
-    const threadId = parts[2];
+  if (smsIdx === -1 || smsIdx === parts.length - 1) {
+    // Whole map of threads updated (path ends with sms_threads or root)
+    const normalized = normalizeThreadsMap(data);
+    updatedThreads = { ...smsThreads, ...normalized };
+  } else {
+    const after = parts.slice(smsIdx + 1);
+    const threadId = after[0];
     const existingThread = smsThreads[threadId] || {
       threadId: Number(threadId),
       messages: {}
     };
 
-    if (parts.length === 3) {
-      updatedThreads[threadId] = { ...existingThread, ...data };
-    } else if (parts[3] === 'messages' && parts[4]) {
-      const msgId = parts[4];
+    if (after.length === 1) {
+      // Single thread object updated
+      if (data && typeof data === 'object') {
+        updatedThreads[threadId] = { ...existingThread, ...data };
+      }
+    } else if (after.length >= 2 && after[1] === 'messages') {
       const existingMsgs = existingThread.messages || {};
+      if (after.length === 2) {
+        // Whole messages map for thread
+        updatedThreads[threadId] = {
+          ...existingThread,
+          messages: { ...existingMsgs, ...data }
+        };
+      } else if (after.length >= 3) {
+        // Single message
+        const msgId = after[2];
+        updatedThreads[threadId] = {
+          ...existingThread,
+          messages: { ...existingMsgs, [msgId]: data }
+        };
+      }
+    } else if (after.length === 2) {
+      // Direct subfield of thread (e.g. snippet, lastTimestamp, unreadCount)
       updatedThreads[threadId] = {
         ...existingThread,
-        messages: { ...existingMsgs, [msgId]: data }
-      };
-    } else if (parts[3]) {
-      updatedThreads[threadId] = {
-        ...existingThread,
-        [parts[3]]: data
+        [after[1]]: data
       };
     }
   }

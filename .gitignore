@@ -39,6 +39,8 @@ ui-debug.log*
 dist/
 *.crx
 *.zip
+extension/firebase-config.js
+!extension/firebase-config.example.js
 
 # Android / Gradle Build Artifacts
 .gradle/

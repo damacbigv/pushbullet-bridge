@@ -463,7 +463,7 @@ object SmsRepository {
         val uri = Uri.parse("content://mms")
 
         try {
-            val projection = arrayOf("_id", "thread_id", "date", "msg_box", "read")
+            val projection = arrayOf("_id", "thread_id", "date", "msg_box", "read", "m_type")
             val cursor = context.contentResolver.query(
                 uri,
                 projection,
@@ -478,30 +478,51 @@ object SmsRepository {
                 val dateCol = c.getColumnIndex("date")
                 val msgBoxCol = c.getColumnIndex("msg_box")
                 val readCol = c.getColumnIndex("read")
+                val mTypeCol = c.getColumnIndex("m_type")
 
                 while (c.moveToNext()) {
-                    if (idCol == -1 || threadIdCol == -1) break
+                    if (idCol == -1) break
                     val mmsId = c.getLong(idCol)
-                    val threadId = c.getLong(threadIdCol)
-                    val list = mmsMap.getOrPut(threadId) { mutableListOf() }
-                    if (list.size >= maxMessagesPerThread) continue
+                    val rawThreadId = if (threadIdCol != -1) c.getLong(threadIdCol) else 0L
+
+                    // Skip m-notification-ind (130) stubs waiting for PDU download
+                    val mType = if (mTypeCol != -1) c.getInt(mTypeCol) else 0
+                    if (mType == 130) continue
 
                     // Telephony MMS date is in seconds
                     val rawDate = if (dateCol != -1) c.getLong(dateCol) else 0L
                     val timestamp = if (rawDate < 10000000000L) rawDate * 1000L else rawDate
                     val msgBox = if (msgBoxCol != -1) c.getInt(msgBoxCol) else 1
                     val read = if (readCol != -1) c.getInt(readCol) == 1 else true
-                    val isIncoming = msgBox == 1 // 1 = inbox, 2 = sent
+                    val isIncoming = msgBox == 1 // 1 = inbox, 2 = sent, 4 = outbox
 
                     // Parse MMS addresses: extracts sender and group participants
                     val addrDetails = queryMmsAddresses(context, mmsId)
+
+                    // Dynamic thread_id resolution for group MMS with 0 or null thread_id
+                    var effectiveThreadId = rawThreadId
+                    if (effectiveThreadId <= 0 && addrDetails.allParticipants.isNotEmpty()) {
+                        try {
+                            effectiveThreadId = Telephony.Threads.getOrCreateThreadId(context, addrDetails.allParticipants)
+                        } catch (_: Exception) {
+                            try {
+                                effectiveThreadId = Telephony.Threads.getOrCreateThreadId(context, addrDetails.allParticipants.first())
+                            } catch (_: Exception) {}
+                        }
+                    }
+
+                    if (effectiveThreadId <= 0) continue
+
+                    val list = mmsMap.getOrPut(effectiveThreadId) { mutableListOf() }
+                    if (list.size >= maxMessagesPerThread) continue
+
                     if (addrDetails.allParticipants.isNotEmpty()) {
-                        threadMmsParticipants.getOrPut(threadId) { mutableSetOf() }.addAll(addrDetails.allParticipants)
+                        threadMmsParticipants.getOrPut(effectiveThreadId) { mutableSetOf() }.addAll(addrDetails.allParticipants)
                     }
 
                     val mmsContent = getMmsContent(context, mmsId)
                     val senderAddress = if (isIncoming) {
-                        addrDetails.sender ?: "Unknown"
+                        addrDetails.sender ?: addrDetails.recipients.firstOrNull() ?: "Unknown"
                     } else {
                         "Me"
                     }
@@ -509,7 +530,7 @@ object SmsRepository {
                     list.add(
                         SmsMessageItem(
                             id = "mms_$mmsId",
-                            threadId = threadId,
+                            threadId = effectiveThreadId,
                             address = senderAddress,
                             contactName = null,
                             body = mmsContent.text,

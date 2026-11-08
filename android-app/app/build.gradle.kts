@@ -1,7 +1,26 @@
+import java.util.Properties
+
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.compose.compiler)
   alias(libs.plugins.kotlin.serialization)
+}
+
+val envProps = Properties()
+val rootEnv = rootProject.file("../.env")
+if (rootEnv.exists()) {
+    rootEnv.forEachLine { line ->
+        val trimmed = line.trim()
+        if (trimmed.isNotEmpty() && !trimmed.startsWith("#") && trimmed.contains("=")) {
+            val key = trimmed.substringBefore("=").trim()
+            val value = trimmed.substringAfter("=").trim().removeSurrounding("\"").removeSurrounding("'")
+            envProps[key] = value
+        }
+    }
+}
+
+fun getEnvConfig(key: String, defaultVal: String = ""): String {
+    return System.getenv(key) ?: envProps.getProperty(key, defaultVal)
 }
 
 android {
@@ -11,8 +30,15 @@ android {
         applicationId = "com.example.pushbridge"
         minSdk = 24
         targetSdk = 36
-        versionCode = 302
-        versionName = "3.0.2"
+        versionCode = 303
+        versionName = "3.0.3"
+
+        buildConfigField("String", "FIREBASE_PROJECT_ID", "\"${getEnvConfig("FIREBASE_PROJECT_ID", "pushclonebridge")}\"")
+        buildConfigField("String", "FIREBASE_RTDB_URL", "\"${getEnvConfig("FIREBASE_DATABASE_URL", "https://pushclonebridge-default-rtdb.firebaseio.com")}\"")
+        buildConfigField("String", "FIREBASE_API_KEY", "\"${getEnvConfig("FIREBASE_API_KEY", "")}\"")
+        buildConfigField("String", "FIREBASE_APP_ID", "\"${getEnvConfig("FIREBASE_APP_ID", "1:250338142494:web:5029dbee8c1e9da606810f")}\"")
+        buildConfigField("String", "FIREBASE_SENDER_ID", "\"${getEnvConfig("FIREBASE_MESSAGING_SENDER_ID", "250338142494")}\"")
+        buildConfigField("String", "FIREBASE_STORAGE_BUCKET", "\"${getEnvConfig("FIREBASE_STORAGE_BUCKET", "pushclonebridge.firebasestorage.app")}\"")
     }
 
     buildTypes {
@@ -28,7 +54,7 @@ android {
     buildFeatures {
       compose = true
       aidl = false
-      buildConfig = false
+      buildConfig = true
       shaders = false
     }
 

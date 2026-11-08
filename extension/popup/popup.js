@@ -27,6 +27,7 @@ let currentSearchQuery = '';
 let mediaLightboxInitialized = false;
 
 document.addEventListener('DOMContentLoaded', async () => {
+  await initTheme();
   setupTabs();
   setupGoogleContacts();
   setupNotificationViews();
@@ -821,8 +822,8 @@ function setupThreadedSms() {
         return;
       }
       targetRecipient = thread.address;
-      isGroup = !!thread.isGroup || (thread.recipients && thread.recipients.length > 1);
-      recipientsList = (thread.recipients || []).map(r => r.phone || r.cleanDigits || r);
+      isGroup = isGroupConversation(thread);
+      recipientsList = getThreadRecipients(thread).map(r => (typeof r === 'object' && r) ? (r.phone || r.cleanDigits || '') : String(r)).filter(Boolean);
     }
 
     const payloadAttachment = selectedChatAttachment;
@@ -941,6 +942,48 @@ function startNewConversation(recipientPhone = '', recipientName = '') {
   document.querySelectorAll('.thread-item-card').forEach(el => el.classList.remove('bg-slate-800', 'border-sky-500'));
 }
 
+/**
+ * Safely extracts recipients from a thread whether stored as an Array or Firebase Object.
+ */
+function getThreadRecipients(thread) {
+  if (!thread || !thread.recipients) return [];
+  if (Array.isArray(thread.recipients)) {
+    return thread.recipients.filter(Boolean);
+  }
+  if (typeof thread.recipients === 'object') {
+    return Object.values(thread.recipients).filter(Boolean);
+  }
+  return [];
+}
+
+/**
+ * Accurately determines if a thread is a multi-recipient group conversation.
+ */
+function isGroupConversation(thread) {
+  if (!thread) return false;
+  if (thread.isGroup === true || thread.isGroup === 'true') return true;
+  const recips = getThreadRecipients(thread);
+  if (recips.length > 1) return true;
+  if (typeof thread.address === 'string' && (thread.address.includes(',') || thread.address.includes(';'))) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Safely extracts messages from a thread whether stored as an Array or Firebase Object map.
+ */
+function getThreadMessages(thread) {
+  if (!thread || !thread.messages) return [];
+  if (Array.isArray(thread.messages)) {
+    return thread.messages.filter(Boolean);
+  }
+  if (typeof thread.messages === 'object') {
+    return Object.values(thread.messages).filter(Boolean);
+  }
+  return [];
+}
+
 async function loadSmsThreads() {
   const container = document.getElementById('thread-list-container');
   const counter = document.getElementById('threads-counter');
@@ -1000,7 +1043,7 @@ async function loadSmsThreads() {
       const snippet = (t.snippet || '').toLowerCase();
 
       // 2. Recipients (for group or multi-recipient threads)
-      const recips = t.recipients || [];
+      const recips = getThreadRecipients(t);
       const recipTexts = recips.map(r => {
         if (typeof r === 'object' && r) {
           const rIden = resolveContactIdentity(r.phone || r.cleanDigits || '', googleContactsCache, deviceList);
@@ -1010,7 +1053,7 @@ async function loadSmsThreads() {
       }).join(' ');
 
       // 3. Deep message bodies in memory
-      const msgs = Array.isArray(t.messages) ? t.messages : Object.values(t.messages || {});
+      const msgs = getThreadMessages(t);
       const msgTexts = msgs.map(m => {
         const body = (m.body || m.text || '').toLowerCase();
         const mSender = (m.contactName || '').toLowerCase();
@@ -1081,8 +1124,8 @@ async function loadSmsThreads() {
 async function createThreadListItem(thread) {
   const item = document.createElement('div');
   const isSelected = String(thread.threadId) === String(activeThreadId);
-  item.className = `thread-item-card p-3 flex items-center gap-2.5 cursor-pointer transition border-l-2 select-none hover:bg-slate-800/60 ${
-    isSelected ? 'bg-slate-800 border-sky-500' : 'border-transparent'
+  item.className = `thread-item-card p-3 flex items-center gap-2.5 cursor-pointer transition border-l-2 select-none theme-thread-hover ${
+    isSelected ? 'theme-thread-active border-sky-500' : 'border-transparent'
   }`;
 
   const {
@@ -1094,14 +1137,14 @@ async function createThreadListItem(thread) {
     ? deviceContactsCache
     : Object.values(deviceContactsCache);
 
-  const isGroup = !!thread.isGroup || (thread.recipients && thread.recipients.length > 1);
+  const isGroup = isGroupConversation(thread);
 
   let displayName = '';
   let avatarHtml = '';
 
   if (isGroup) {
     // Group conversation
-    const recips = thread.recipients || [];
+    const recips = getThreadRecipients(thread);
     if (thread.groupTitle && thread.groupTitle.trim()) {
       displayName = thread.groupTitle;
     } else if (recips.length > 0) {
@@ -1232,8 +1275,8 @@ async function renderActiveConversation() {
     return;
   }
 
-  const isGroup = !!thread.isGroup || (thread.recipients && thread.recipients.length > 1);
-  const recips = thread.recipients || [];
+  const isGroup = isGroupConversation(thread);
+  const recips = getThreadRecipients(thread);
 
   if (isGroup) {
     headerAvatar.textContent = '👥';
@@ -1286,7 +1329,7 @@ async function renderActiveConversation() {
   }
 
   // Extract messages and sort chronologically (oldest to newest)
-  const rawMessages = thread.messages ? Object.values(thread.messages) : [];
+  const rawMessages = getThreadMessages(thread);
   rawMessages.sort((a, b) => a.timestamp - b.timestamp);
 
   container.innerHTML = '';
@@ -1337,8 +1380,8 @@ function createChatBubble(msg, senderName, isGroupChat = false) {
   row.className = `flex flex-col ${isIncoming ? 'items-start' : 'items-end'} space-y-1`;
 
   const bubbleClass = isIncoming
-    ? 'bg-slate-800 text-slate-100 rounded-2xl rounded-tl-sm border border-slate-700/60'
-    : 'bg-sky-600 text-white rounded-2xl rounded-tr-sm shadow-md';
+    ? 'theme-msg-recv rounded-2xl rounded-tl-sm'
+    : 'theme-msg-sent rounded-2xl rounded-tr-sm shadow-md';
 
   // Format message text with clickable links and real-time search keyword highlighting
   let formattedBody = linkifyText(msg.body || '');
@@ -1624,8 +1667,45 @@ function setupGlobalEvents() {
       }
     } else if (message.type === 'CLIPBOARD_UPDATED') {
       loadClipboardState();
+    } else if (message.type === 'THEME_CHANGED') {
+      applyDashboardTheme(message.theme);
     }
   });
+}
+
+/**
+ * Initializes and binds the UI Theme Selector.
+ */
+async function initTheme() {
+  const { selectedTheme = 'midnight' } = await chrome.storage.local.get('selectedTheme');
+  applyDashboardTheme(selectedTheme);
+
+  const themeSelector = document.getElementById('theme-selector');
+  if (themeSelector) {
+    themeSelector.value = selectedTheme;
+    themeSelector.addEventListener('change', async (e) => {
+      const newTheme = e.target.value;
+      applyDashboardTheme(newTheme);
+      await chrome.storage.local.set({ selectedTheme: newTheme });
+      chrome.runtime.sendMessage({
+        type: 'THEME_CHANGED',
+        theme: newTheme
+      }).catch(() => {});
+    });
+  }
+}
+
+/**
+ * Applies the selected theme attributes to the DOM root.
+ */
+function applyDashboardTheme(theme) {
+  if (!theme) return;
+  document.documentElement.setAttribute('data-theme', theme);
+  document.body.setAttribute('data-theme', theme);
+  const themeSelector = document.getElementById('theme-selector');
+  if (themeSelector && themeSelector.value !== theme) {
+    themeSelector.value = theme;
+  }
 }
 
 function showToast(msg) {

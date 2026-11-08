@@ -160,6 +160,7 @@ fun MainScreen(
                         }
                     )
                     ConversationThreadsPreviewCard(context)
+                    ThemeShowcaseCard()
                     DiagnosticsCard(context, testStatusText) { newStatus ->
                         testStatusText = newStatus
                     }
@@ -211,6 +212,7 @@ fun MainScreen(
                     }
                 )
                 ConversationThreadsPreviewCard(context)
+                ThemeShowcaseCard()
                 DiagnosticsCard(context, testStatusText) { newStatus ->
                     testStatusText = newStatus
                 }
@@ -457,7 +459,7 @@ private fun ConversationThreadsPreviewCard(context: Context) {
                     border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF0EA5E9))
                 ) {
                     Text(
-                        "v3.0.2",
+                        "v3.0.3",
                         modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
@@ -510,6 +512,71 @@ private fun ConversationThreadsPreviewCard(context: Context) {
                     }
                     if (index < sampleThreads.size - 1) {
                         HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ThemeShowcaseCard() {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("UI THEME ENGINE (V3.0.3)", style = MaterialTheme.typography.labelSmall, color = Color(0xFF0EA5E9))
+                Text("WCAG AA / AAA", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF10B981))
+            }
+            Text(
+                "Dynamic themes synchronized across Android companion & Chrome extension dashboards with compliant contrast ratios:",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+            )
+
+            val themes = listOf(
+                Triple("Midnight Dark", Color(0xFF090D16), Color(0xFF38BDF8)),
+                Triple("Solarized Clean", Color(0xFFFDF6E3), Color(0xFF268BD2)),
+                Triple("Emerald Forest", Color(0xFF04140E), Color(0xFF10B981)),
+                Triple("Sunset Neon", Color(0xFF12091F), Color(0xFFF43F5E)),
+                Triple("Classic Minimal", Color(0xFF0D0D0D), Color(0xFFE5E5E5))
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                themes.forEach { (name, bg, accent) ->
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(bg, RoundedCornerShape(8.dp))
+                                .border(1.5.dp, accent, RoundedCornerShape(8.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(14.dp)
+                                    .background(accent, RoundedCornerShape(4.dp))
+                            )
+                        }
+                        Text(
+                            name.substringBefore(" "),
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }

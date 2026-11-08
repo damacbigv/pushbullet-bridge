@@ -18,7 +18,7 @@
       <div class="flex items-center gap-2">
         <h1 class="text-sm font-bold tracking-tight text-white flex items-center gap-1.5">
           PushBridge
-          <span class="text-[10px] font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/20 px-1.5 py-0.5 rounded">v3.0.2</span>
+          <span class="text-[10px] font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/20 px-1.5 py-0.5 rounded">v3.0.3</span>
         </h1>
       </div>
 
@@ -37,6 +37,15 @@
 
     <!-- Header Actions -->
     <div class="flex items-center gap-2">
+      <!-- Theme Selector Dropdown -->
+      <select id="theme-selector" class="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-lg px-2 py-1 outline-none focus:border-sky-500 cursor-pointer font-medium" title="Change Dashboard Theme">
+        <option value="midnight">🌙 Midnight</option>
+        <option value="solarized">☀️ Solarized</option>
+        <option value="emerald">🌲 Emerald</option>
+        <option value="sunset">🌆 Sunset</option>
+        <option value="minimalist">⚪ Minimal</option>
+      </select>
+
       <!-- Device Selector -->
       <select id="target-device-select" class="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-lg px-2.5 py-1 outline-none focus:border-sky-500 cursor-pointer max-w-[170px] truncate">
         <option value="">Detecting phone...</option>
@@ -53,6 +62,10 @@
       <button id="btn-expand-tab" title="Open in Full Tab Dashboard" class="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition text-xs border border-slate-700">
         ↗
       </button>
+
+      <a href="../options/options.html" target="_blank" title="Settings & Preferences" class="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition text-xs border border-slate-700 flex items-center justify-center">
+        ⚙️
+      </a>
     </div>
   </header>
 

@@ -1,0 +1,53 @@
+name: Build PushBridge Android APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Android Companion APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Inject Environment Secrets
+        run: |
+          cat <<EOF > .env
+          PORT=3000
+          NODE_ENV=production
+          FIREBASE_PROJECT_ID=${{ secrets.FIREBASE_PROJECT_ID || 'pushclonebridge' }}
+          FIREBASE_DATABASE_URL=${{ secrets.FIREBASE_DATABASE_URL || 'https://pushclonebridge-default-rtdb.firebaseio.com' }}
+          FIREBASE_API_KEY=${{ secrets.FIREBASE_API_KEY }}
+          FIREBASE_STORAGE_BUCKET=${{ secrets.FIREBASE_STORAGE_BUCKET || 'pushclonebridge.firebasestorage.app' }}
+          FIREBASE_MESSAGING_SENDER_ID=${{ secrets.FIREBASE_MESSAGING_SENDER_ID || '250338142494' }}
+          FIREBASE_APP_ID=${{ secrets.FIREBASE_APP_ID || '1:250338142494:web:5029dbee8c1e9da606810f' }}
+          EOF
+
+      - name: Grant Execute Permission to Gradlew
+        run: chmod +x android-app/gradlew
+
+      - name: Build APK with Gradle
+        run: |
+          cd android-app
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PushBridge-Debug-APK
+          path: android-app/app/build/outputs/apk/debug/*.apk
+          retention-days: 14

@@ -1,16 +1,17 @@
 /**
- * PushBridge Firebase Web SDK Configuration Template
- * Copy this file to firebase-config.js and insert your Firebase Project credentials.
+ * PushBridge Firebase Web SDK Configuration (Template)
+ *
+ * Copy to firebase-config.js or let build.js inject from root .env.
  */
 export const firebaseConfig = {
   apiKey: "YOUR_FIREBASE_API_KEY",
-  authDomain: "your-project-id.firebaseapp.com",
+  authDomain: "your-project.firebaseapp.com",
   projectId: "your-project-id",
-  databaseURL: "https://your-project-id-default-rtdb.firebaseio.com",
-  storageBucket: "your-project-id.firebasestorage.app",
-  messagingSenderId: "000000000000",
-  appId: "1:000000000000:web:000000000000",
-  measurementId: "G-XXXXXXXXXX"
+  databaseURL: "https://your-project-default-rtdb.firebaseio.com",
+  storageBucket: "your-project.firebasestorage.app",
+  messagingSenderId: "YOUR_SENDER_ID",
+  appId: "YOUR_APP_ID",
+  measurementId: ""
 };
 
 export default firebaseConfig;

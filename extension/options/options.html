@@ -3,17 +3,60 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PushBridge Settings</title>
+  <title>PushBridge Settings (v3.0.3)</title>
   <link rel="stylesheet" href="options.css">
 </head>
 <body>
   <div class="settings-container">
     <header class="header">
       <h1>PushBridge Configuration</h1>
-      <p class="subtitle">Self-hosted Android & Chrome Notification/SMS Bridge</p>
+      <p class="subtitle">Self-hosted Android & Chrome Notification/SMS Bridge (v3.0.3)</p>
     </header>
 
     <form id="settings-form">
+      <!-- UI Theme Selector Section -->
+      <section class="section">
+        <h2>Interface Visual Theme</h2>
+        <small>Select your preferred dashboard color scheme. Meets WCAG AA / AAA contrast standards.</small>
+
+        <div class="theme-grid" id="theme-grid">
+          <div class="theme-card active" data-theme-val="midnight">
+            <div class="theme-preview-box" style="background-color: #090d16; border: 1px solid #1e293b;">
+              <div class="theme-preview-bubble" style="background-color: #0284c7;"></div>
+            </div>
+            <span class="theme-label">Midnight</span>
+          </div>
+
+          <div class="theme-card" data-theme-val="solarized">
+            <div class="theme-preview-box" style="background-color: #fdf6e3; border: 1px solid #d5cdb7;">
+              <div class="theme-preview-bubble" style="background-color: #268bd2;"></div>
+            </div>
+            <span class="theme-label">Solarized</span>
+          </div>
+
+          <div class="theme-card" data-theme-val="emerald">
+            <div class="theme-preview-box" style="background-color: #04140e; border: 1px solid #134e38;">
+              <div class="theme-preview-bubble" style="background-color: #059669;"></div>
+            </div>
+            <span class="theme-label">Emerald</span>
+          </div>
+
+          <div class="theme-card" data-theme-val="sunset">
+            <div class="theme-preview-box" style="background-color: #12091f; border: 1px solid #3c1e67;">
+              <div class="theme-preview-bubble" style="background-color: #db2777;"></div>
+            </div>
+            <span class="theme-label">Sunset</span>
+          </div>
+
+          <div class="theme-card" data-theme-val="minimalist">
+            <div class="theme-preview-box" style="background-color: #0d0d0d; border: 1px solid #2a2a2a;">
+              <div class="theme-preview-bubble" style="background-color: #3b82f6;"></div>
+            </div>
+            <span class="theme-label">Minimalist</span>
+          </div>
+        </div>
+      </section>
+
       <section class="section">
         <h2>Firebase Real-Time Credentials</h2>
         <div class="field-group">

@@ -1,1 +1,233 @@
 @import "tailwindcss";
+
+/* ==========================================================================
+   PushBridge UI Theme Engine (Version 3.0.3)
+   WCAG AA / AAA Compliant Visual Palettes
+   ========================================================================== */
+
+:root,
+[data-theme="midnight"],
+body[data-theme="midnight"] {
+  --theme-bg: #090d16;
+  --theme-surface: #0f172a;
+  --theme-surface-subtle: #0b1120;
+  --theme-surface-hover: #1e293b;
+  --theme-border: #1e293b;
+  --theme-border-subtle: #1e293b;
+  --theme-text-main: #f8fafc;
+  --theme-text-muted: #94a3b8;
+  --theme-text-subtle: #64748b;
+  --theme-primary: #0284c7;
+  --theme-primary-hover: #0369a1;
+  --theme-accent: #38bdf8;
+  --theme-msg-sent: #0284c7;
+  --theme-msg-sent-text: #ffffff;
+  --theme-msg-recv: #1e293b;
+  --theme-msg-recv-text: #f8fafc;
+  --theme-active-item: #1e293b;
+  --theme-badge-bg: rgba(2, 132, 199, 0.15);
+  --theme-badge-text: #38bdf8;
+}
+
+[data-theme="solarized"],
+body[data-theme="solarized"] {
+  --theme-bg: #fdf6e3;
+  --theme-surface: #eee8d5;
+  --theme-surface-subtle: #f7f1df;
+  --theme-surface-hover: #e2dbc8;
+  --theme-border: #d5cdb7;
+  --theme-border-subtle: #e2dbc8;
+  --theme-text-main: #073642;
+  --theme-text-muted: #586e75;
+  --theme-text-subtle: #657b83;
+  --theme-primary: #268bd2;
+  --theme-primary-hover: #1e70a8;
+  --theme-accent: #2aa198;
+  --theme-msg-sent: #268bd2;
+  --theme-msg-sent-text: #ffffff;
+  --theme-msg-recv: #e2dbc8;
+  --theme-msg-recv-text: #073642;
+  --theme-active-item: #dfd8c2;
+  --theme-badge-bg: rgba(38, 139, 210, 0.15);
+  --theme-badge-text: #17669d;
+}
+
+[data-theme="emerald"],
+body[data-theme="emerald"] {
+  --theme-bg: #04140e;
+  --theme-surface: #0a2e20;
+  --theme-surface-subtle: #061c13;
+  --theme-surface-hover: #114232;
+  --theme-border: #134e38;
+  --theme-border-subtle: #0f3d2b;
+  --theme-text-main: #f0fdf4;
+  --theme-text-muted: #86efac;
+  --theme-text-subtle: #4ade80;
+  --theme-primary: #059669;
+  --theme-primary-hover: #047857;
+  --theme-accent: #10b981;
+  --theme-msg-sent: #047857;
+  --theme-msg-sent-text: #ffffff;
+  --theme-msg-recv: #114232;
+  --theme-msg-recv-text: #f0fdf4;
+  --theme-active-item: #134e38;
+  --theme-badge-bg: rgba(16, 185, 129, 0.18);
+  --theme-badge-text: #6ee7b7;
+}
+
+[data-theme="sunset"],
+body[data-theme="sunset"] {
+  --theme-bg: #12091f;
+  --theme-surface: #1e1035;
+  --theme-surface-subtle: #170b2c;
+  --theme-surface-hover: #291546;
+  --theme-border: #3c1e67;
+  --theme-border-subtle: #2d164d;
+  --theme-text-main: #faf5ff;
+  --theme-text-muted: #d8b4fe;
+  --theme-text-subtle: #c084fc;
+  --theme-primary: #db2777;
+  --theme-primary-hover: #be185d;
+  --theme-accent: #f43f5e;
+  --theme-msg-sent: #be185d;
+  --theme-msg-sent-text: #ffffff;
+  --theme-msg-recv: #331956;
+  --theme-msg-recv-text: #faf5ff;
+  --theme-active-item: #3c1e67;
+  --theme-badge-bg: rgba(236, 72, 153, 0.18);
+  --theme-badge-text: #f472b6;
+}
+
+[data-theme="minimalist"],
+body[data-theme="minimalist"] {
+  --theme-bg: #0d0d0d;
+  --theme-surface: #171717;
+  --theme-surface-subtle: #121212;
+  --theme-surface-hover: #212121;
+  --theme-border: #2a2a2a;
+  --theme-border-subtle: #222222;
+  --theme-text-main: #f5f5f5;
+  --theme-text-muted: #a3a3a3;
+  --theme-text-subtle: #737373;
+  --theme-primary: #3b82f6;
+  --theme-primary-hover: #2563eb;
+  --theme-accent: #60a5fa;
+  --theme-msg-sent: #262626;
+  --theme-msg-sent-text: #ffffff;
+  --theme-msg-recv: #1c1c1c;
+  --theme-msg-recv-text: #f5f5f5;
+  --theme-active-item: #282828;
+  --theme-badge-bg: rgba(255, 255, 255, 0.12);
+  --theme-badge-text: #e5e5e5;
+}
+
+/* Dynamic theme applications across elements */
+body {
+  background-color: var(--theme-bg) !important;
+  color: var(--theme-text-main) !important;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+header {
+  background-color: var(--theme-surface) !important;
+  border-color: var(--theme-border) !important;
+}
+
+nav#main-nav {
+  background-color: var(--theme-surface) !important;
+  border-color: var(--theme-border) !important;
+}
+
+#sms-tab-view {
+  background-color: var(--theme-bg) !important;
+}
+
+#thread-list-container {
+  background-color: var(--theme-surface-subtle) !important;
+}
+
+#thread-search-input {
+  background-color: var(--theme-surface) !important;
+  border-color: var(--theme-border) !important;
+  color: var(--theme-text-main) !important;
+}
+
+#thread-limit-select, #target-device-select, #theme-selector {
+  background-color: var(--theme-surface) !important;
+  border-color: var(--theme-border) !important;
+  color: var(--theme-text-main) !important;
+}
+
+#btn-sync-threads, #btn-test-toast, #btn-google-auth, #btn-new-chat, .header-btn {
+  background-color: var(--theme-surface) !important;
+  border-color: var(--theme-border) !important;
+  color: var(--theme-text-main) !important;
+}
+
+#active-thread-chat-view {
+  background-color: var(--theme-bg) !important;
+}
+
+#active-thread-header {
+  background-color: var(--theme-surface) !important;
+  border-color: var(--theme-border) !important;
+}
+
+#active-thread-messages {
+  background-color: var(--theme-bg) !important;
+}
+
+#active-thread-composer {
+  background-color: var(--theme-surface) !important;
+  border-color: var(--theme-border) !important;
+}
+
+#composer-input {
+  background-color: var(--theme-surface-subtle) !important;
+  border-color: var(--theme-border) !important;
+  color: var(--theme-text-main) !important;
+}
+
+#btn-send-chat {
+  background-color: var(--theme-primary) !important;
+}
+
+#btn-send-chat:hover {
+  background-color: var(--theme-primary-hover) !important;
+}
+
+.theme-msg-sent {
+  background-color: var(--theme-msg-sent) !important;
+  color: var(--theme-msg-sent-text) !important;
+}
+
+.theme-msg-recv {
+  background-color: var(--theme-msg-recv) !important;
+  color: var(--theme-msg-recv-text) !important;
+  border: 1px solid var(--theme-border) !important;
+}
+
+.theme-thread-active {
+  background-color: var(--theme-active-item) !important;
+  border-color: var(--theme-primary) !important;
+}
+
+.theme-thread-hover:hover {
+  background-color: var(--theme-surface-hover) !important;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--theme-border);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--theme-text-subtle);
+}

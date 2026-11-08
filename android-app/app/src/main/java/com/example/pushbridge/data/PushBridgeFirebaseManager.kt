@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.os.Build
 import android.util.Log
+import com.example.pushbridge.BuildConfig
 import com.example.pushbridge.model.DeviceRole
 import com.example.pushbridge.model.NotificationPayload
 import com.example.pushbridge.model.SmsPayload
@@ -22,12 +23,8 @@ import java.util.UUID
 object PushBridgeFirebaseManager {
     private const val TAG = "PushBridgeFirebase"
 
-    const val FIREBASE_PROJECT_ID = "pushclonebridge"
-    const val FIREBASE_RTDB_URL = "https://pushclonebridge-default-rtdb.firebaseio.com"
-    private const val FIREBASE_API_KEY = "AIzaSyCmoxdDpdYz_Gxsx04zXSemus6fJmA4-gU"
-    private const val FIREBASE_APP_ID = "1:250338142494:web:5029dbee8c1e9da606810f"
-    private const val FIREBASE_SENDER_ID = "250338142494"
-    private const val FIREBASE_STORAGE_BUCKET = "pushclonebridge.firebasestorage.app"
+    val FIREBASE_PROJECT_ID: String = BuildConfig.FIREBASE_PROJECT_ID
+    val FIREBASE_RTDB_URL: String = BuildConfig.FIREBASE_RTDB_URL
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var isInitialized = false
@@ -59,27 +56,33 @@ object PushBridgeFirebaseManager {
     }
 
     /**
-     * Initializes the Firebase Android SDK programmatically using provided configuration credentials.
+     * Initializes the Firebase Android SDK programmatically using provided configuration credentials
+     * without embedding raw secrets in source code.
      */
     fun initialize(context: Context) {
         if (isInitialized) return
 
         try {
             val app = if (FirebaseApp.getApps(context).isEmpty()) {
-                val options = FirebaseOptions.Builder()
-                    .setApiKey(FIREBASE_API_KEY)
-                    .setApplicationId(FIREBASE_APP_ID)
-                    .setProjectId(FIREBASE_PROJECT_ID)
-                    .setDatabaseUrl(FIREBASE_RTDB_URL)
-                    .setGcmSenderId(FIREBASE_SENDER_ID)
-                    .setStorageBucket(FIREBASE_STORAGE_BUCKET)
+                val options = try {
+                    FirebaseOptions.fromResource(context)
+                } catch (e: Exception) {
+                    null
+                } ?: FirebaseOptions.Builder()
+                    .setApiKey(BuildConfig.FIREBASE_API_KEY)
+                    .setApplicationId(BuildConfig.FIREBASE_APP_ID)
+                    .setProjectId(BuildConfig.FIREBASE_PROJECT_ID)
+                    .setDatabaseUrl(BuildConfig.FIREBASE_RTDB_URL)
+                    .setGcmSenderId(BuildConfig.FIREBASE_SENDER_ID)
+                    .setStorageBucket(BuildConfig.FIREBASE_STORAGE_BUCKET)
                     .build()
                 FirebaseApp.initializeApp(context, options)
             } else {
                 FirebaseApp.getInstance()
             }
 
-            database = FirebaseDatabase.getInstance(app, FIREBASE_RTDB_URL)
+            val targetRtdbUrl = app.options.databaseUrl?.takeIf { it.isNotBlank() } ?: BuildConfig.FIREBASE_RTDB_URL
+            database = FirebaseDatabase.getInstance(app, targetRtdbUrl)
             try {
                 database?.setPersistenceEnabled(true)
             } catch (_: Exception) {
@@ -88,7 +91,7 @@ object PushBridgeFirebaseManager {
 
             isInitialized = true
             val role = getDeviceRole(context)
-            Log.i(TAG, "Firebase initialized for project: $FIREBASE_PROJECT_ID (Device Role: $role)")
+            Log.i(TAG, "Firebase initialized for project: ${app.options.projectId ?: BuildConfig.FIREBASE_PROJECT_ID} (Device Role: $role)")
 
             registerDeviceState(context)
             setupPresence(context)
@@ -307,6 +310,38 @@ object PushBridgeFirebaseManager {
                 .addOnFailureListener { err ->
                     Log.e(TAG, "Failed syncing SMS threads to Firebase: ${err.message}", err)
                 }
+        }
+    }
+
+    /**
+     * Synchronizes a single SMS conversation thread to Firebase Realtime Database.
+     * Fast targeted sync for real-time group message updates.
+     */
+    fun syncSingleThread(context: Context, threadId: Long, onComplete: (() -> Unit)? = null) {
+        if (threadId <= 0) return
+        scope.launch {
+            if (!isInitialized) initialize(context)
+            val deviceId = getDeviceId(context)
+            val threads = SmsRepository.queryConversationThreads(context, maxThreads = currentPaginationLimit)
+            val target = threads.firstOrNull { it.threadId == threadId }
+            if (target != null) {
+                val threadRef = database?.getReference("devices")
+                    ?.child(deviceId)
+                    ?.child("sms_threads")
+                    ?.child(threadId.toString()) ?: return@launch
+
+                threadRef.setValue(target.toMap())
+                    .addOnSuccessListener {
+                        Log.i(TAG, "Successfully synced single thread $threadId (isGroup=${target.isGroup}) to Firebase.")
+                        touchHeartbeat(context)
+                        onComplete?.invoke()
+                    }
+                    .addOnFailureListener { err ->
+                        Log.w(TAG, "Failed syncing single thread $threadId: ${err.message}")
+                    }
+            } else {
+                syncAllSmsThreads(context)
+            }
         }
     }
 
