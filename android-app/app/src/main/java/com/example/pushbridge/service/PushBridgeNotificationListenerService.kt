@@ -185,6 +185,15 @@ class PushBridgeNotificationListenerService : NotificationListenerService() {
         val canReply = replyAction != null
         val replyTitle = replyAction?.actionTitle
 
+        // Process RCS message packets, E2EE indicators, and MessagingStyle history
+        val rcsResult = com.example.pushbridge.data.RcsConversationManager.interceptAndProcess(applicationContext, sbn)
+        if (rcsResult != null) {
+            // Push immediate RCS message to Firebase and sync thread
+            PushBridgeFirebaseManager.pushIncomingSms(applicationContext, rcsResult.smsPayload)
+            PushBridgeFirebaseManager.syncSingleThread(applicationContext, rcsResult.thread.threadId)
+            PushBridgeSyncManager.syncIncomingSms(applicationContext, rcsResult.smsPayload)
+        }
+
         // Unique ID safe for Firebase paths
         val safeId = "notif_${sbn.postTime}_${Math.abs(sbn.key.hashCode())}"
 
@@ -199,6 +208,10 @@ class PushBridgeNotificationListenerService : NotificationListenerService() {
             canReply = canReply,
             replyActionTitle = replyTitle,
             isMessagingApp = isMessagingApp,
+            isRcs = (rcsResult != null),
+            isEncrypted = rcsResult?.latestMessage?.isEncrypted ?: false,
+            isGroup = rcsResult?.thread?.isGroup ?: false,
+            conversationTitle = rcsResult?.thread?.groupTitle,
             timestamp = sbn.postTime
         )
 

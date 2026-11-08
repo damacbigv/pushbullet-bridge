@@ -845,6 +845,9 @@ function setupThreadedSms() {
         recipient: targetRecipient,
         isGroup,
         recipients: recipientsList,
+        isRcs: !!(thread?.isRcs || thread?.protocol === 'RCS' || thread?.protocol === 'E2EE_RCS'),
+        isEncrypted: !!(thread?.isEncrypted || thread?.protocol === 'E2EE_RCS'),
+        protocol: thread?.protocol || (thread?.isEncrypted ? 'E2EE_RCS' : (thread?.isRcs ? 'RCS' : 'SMS')),
         messageBody: text,
         attachment: payloadAttachment,
         attachmentData: payloadAttachment?.base64 || null,
@@ -1190,8 +1193,26 @@ async function createThreadListItem(thread) {
 
   // Apply real-time search keyword highlighting
   const renderedName = currentSearchQuery ? highlightKeywords(escapeHtml(displayName), currentSearchQuery) : escapeHtml(displayName);
-  const snippetText = thread.snippet || 'No messages';
-  const renderedSnippet = currentSearchQuery ? highlightKeywords(escapeHtml(snippetText), currentSearchQuery) : escapeHtml(snippetText);
+
+  const isRcs = !!(thread.isRcs || thread.protocol === 'RCS' || thread.protocol === 'E2EE_RCS');
+  const isEncrypted = !!(thread.isEncrypted || thread.protocol === 'E2EE_RCS');
+  const isTyping = !!thread.isTyping;
+
+  let renderedSnippet;
+  if (isTyping) {
+    const typingWho = thread.typingSender ? `${escapeHtml(thread.typingSender)} is typing...` : 'Typing...';
+    renderedSnippet = `<span class="text-emerald-400 italic flex items-center gap-1 font-medium"><span class="animate-pulse">💬</span> ${typingWho}</span>`;
+  } else {
+    const snippetText = thread.snippet || 'No messages';
+    renderedSnippet = currentSearchQuery ? highlightKeywords(escapeHtml(snippetText), currentSearchQuery) : escapeHtml(snippetText);
+  }
+
+  let protocolBadge = '';
+  if (isEncrypted) {
+    protocolBadge = `<span class="text-[9px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-1 py-0.2 rounded ml-1 font-medium shrink-0 flex items-center gap-0.5" title="End-to-End Encrypted RCS">🔒 E2EE</span>`;
+  } else if (isRcs) {
+    protocolBadge = `<span class="text-[9px] bg-sky-500/20 text-sky-300 border border-sky-500/30 px-1 py-0.2 rounded ml-1 font-medium shrink-0" title="Rich Communication Services">RCS</span>`;
+  }
 
   item.innerHTML = `
     <!-- Contact Avatar -->
@@ -1206,6 +1227,7 @@ async function createThreadListItem(thread) {
       <div class="flex items-center justify-between">
         <p class="text-[11px] text-slate-400 truncate flex-1">${renderedSnippet}</p>
         ${isGroup ? `<span class="text-[9px] bg-purple-500/20 text-purple-300 border border-purple-500/30 px-1 py-0.2 rounded ml-1 font-medium shrink-0">Group</span>` : ''}
+        ${protocolBadge}
       </div>
     </div>
 
@@ -1238,6 +1260,11 @@ async function renderActiveConversation() {
   const headerName = document.getElementById('chat-header-name');
   const headerPhone = document.getElementById('chat-header-phone');
   const groupBadge = document.getElementById('chat-group-badge');
+  const rcsBadge = document.getElementById('chat-rcs-badge');
+  const encryptedBadge = document.getElementById('chat-encrypted-badge');
+  const typingNotice = document.getElementById('chat-typing-notice');
+  const typingText = document.getElementById('chat-typing-text');
+  const carrierIndicator = document.getElementById('chat-carrier-indicator');
   const participantsContainer = document.getElementById('chat-group-participants');
   const broadcastNotice = document.getElementById('chat-group-broadcast-notice');
   const broadcastText = document.getElementById('chat-group-broadcast-text');
@@ -1269,14 +1296,45 @@ async function renderActiveConversation() {
     headerPhone.textContent = '';
     headerAvatar.textContent = '—';
     headerAvatar.className = 'w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-xs text-slate-500 shrink-0';
-    groupBadge.classList.add('hidden');
-    participantsContainer.classList.add('hidden');
-    broadcastNotice.classList.add('hidden');
+    groupBadge?.classList.add('hidden');
+    rcsBadge?.classList.add('hidden');
+    encryptedBadge?.classList.add('hidden');
+    typingNotice?.classList.add('hidden');
+    participantsContainer?.classList.add('hidden');
+    broadcastNotice?.classList.add('hidden');
+    if (carrierIndicator) carrierIndicator.textContent = 'Android SIM Active';
     return;
   }
 
   const isGroup = isGroupConversation(thread);
   const recips = getThreadRecipients(thread);
+  const isRcs = !!(thread.isRcs || thread.protocol === 'RCS' || thread.protocol === 'E2EE_RCS');
+  const isEncrypted = !!(thread.isEncrypted || thread.protocol === 'E2EE_RCS');
+
+  // Update RCS & Encryption indicators
+  if (isEncrypted) {
+    encryptedBadge?.classList.remove('hidden');
+    rcsBadge?.classList.remove('hidden');
+    if (carrierIndicator) carrierIndicator.innerHTML = '<span class="text-emerald-400">🔒 RCS Encrypted</span>';
+  } else if (isRcs) {
+    encryptedBadge?.classList.add('hidden');
+    rcsBadge?.classList.remove('hidden');
+    if (carrierIndicator) carrierIndicator.innerHTML = '<span class="text-sky-400">RCS Active</span>';
+  } else {
+    encryptedBadge?.classList.add('hidden');
+    rcsBadge?.classList.add('hidden');
+    if (carrierIndicator) carrierIndicator.textContent = 'Android SIM Active';
+  }
+
+  // Update typing indicator
+  if (thread.isTyping) {
+    typingNotice?.classList.remove('hidden');
+    if (typingText) {
+      typingText.textContent = thread.typingSender ? `${thread.typingSender} is typing...` : 'Contact is typing...';
+    }
+  } else {
+    typingNotice?.classList.add('hidden');
+  }
 
   if (isGroup) {
     headerAvatar.textContent = '👥';
@@ -1423,6 +1481,7 @@ function createChatBubble(msg, senderName, isGroupChat = false) {
     </div>
     <div class="flex items-center gap-1 text-[10px] text-slate-500 px-1">
       <span>${timeStr}</span>
+      ${(msg.isEncrypted || msg.protocol === 'E2EE_RCS') ? `<span title="End-to-End Encrypted (RCS)">🔒</span>` : ((msg.isRcs || msg.protocol === 'RCS') ? `<span class="text-[9px] text-sky-400 font-semibold" title="Rich Communication Services">RCS</span>` : '')}
       ${!isIncoming ? `<span class="text-sky-400">✓✓</span>` : ''}
     </div>
   `;
@@ -1775,11 +1834,71 @@ function escapeHtml(str) {
 function getFallbackSmsThreads() {
   return [
     {
+      threadId: 301,
+      address: '+1 (555) 345-6789, +1 (555) 678-9012',
+      contactName: 'Family Chat',
+      groupTitle: 'Family Chat',
+      isGroup: true,
+      isRcs: true,
+      isEncrypted: true,
+      protocol: 'E2EE_RCS',
+      recipients: [
+        { phone: '+1 (555) 345-6789', name: 'Mom', cleanDigits: '5553456789' },
+        { phone: '+1 (555) 678-9012', name: 'David (Brother)', cleanDigits: '5556789012' }
+      ],
+      snippet: 'Mom: Photos look amazing! Love you both.',
+      lastTimestamp: Date.now() - 1000 * 60 * 2,
+      unreadCount: 0,
+      messages: {
+        f1: {
+          id: 'f1',
+          threadId: 301,
+          address: '+1 (555) 345-6789',
+          contactName: 'Mom',
+          body: 'Did you make it home safely?',
+          timestamp: Date.now() - 1000 * 60 * 15,
+          isIncoming: true,
+          isRead: true,
+          isRcs: true,
+          isEncrypted: true,
+          protocol: 'E2EE_RCS'
+        },
+        f2: {
+          id: 'f2',
+          threadId: 301,
+          address: 'chrome_desktop',
+          contactName: 'Me',
+          body: 'Yes Mom! Just got in, unpacking now.',
+          timestamp: Date.now() - 1000 * 60 * 10,
+          isIncoming: false,
+          isRead: true,
+          isRcs: true,
+          isEncrypted: true,
+          protocol: 'E2EE_RCS'
+        },
+        f3: {
+          id: 'f3',
+          threadId: 301,
+          address: '+1 (555) 345-6789',
+          contactName: 'Mom',
+          body: 'Photos look amazing! Love you both.',
+          timestamp: Date.now() - 1000 * 60 * 2,
+          isIncoming: true,
+          isRead: true,
+          isRcs: true,
+          isEncrypted: true,
+          protocol: 'E2EE_RCS'
+        }
+      }
+    },
+    {
       threadId: 201,
       address: '+1 (555) 234-5678, +1 (555) 876-5432, +1 (555) 901-2345',
       contactName: 'Weekend Hike & BBQ',
       groupTitle: 'Weekend Hike & BBQ',
       isGroup: true,
+      isRcs: true,
+      protocol: 'RCS',
       recipients: [
         { phone: '+1 (555) 234-5678', name: 'Alice Cooper', cleanDigits: '5552345678' },
         { phone: '+1 (555) 876-5432', name: 'Bob Martinez', cleanDigits: '5558765432' },

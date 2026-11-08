@@ -17,6 +17,10 @@ data class NotificationPayload(
     val canReply: Boolean = false,
     val replyActionTitle: String? = null,
     val isMessagingApp: Boolean = false,
+    val isRcs: Boolean = false,
+    val isEncrypted: Boolean = false,
+    val isGroup: Boolean = false,
+    val conversationTitle: String? = null,
     val timestamp: Long = System.currentTimeMillis()
 ) {
     fun toMap(): Map<String, Any?> = mapOf(
@@ -30,6 +34,10 @@ data class NotificationPayload(
         "canReply" to canReply,
         "replyActionTitle" to (replyActionTitle ?: ""),
         "isMessagingApp" to isMessagingApp,
+        "isRcs" to isRcs,
+        "isEncrypted" to isEncrypted,
+        "isGroup" to isGroup,
+        "conversationTitle" to (conversationTitle ?: ""),
         "timestamp" to timestamp
     )
 }
@@ -41,7 +49,11 @@ data class SmsPayload(
     val timestamp: Long = System.currentTimeMillis(),
     val isGroup: Boolean = false,
     val recipients: List<String> = emptyList(),
-    val attachmentData: String? = null
+    val attachmentData: String? = null,
+    val isRcs: Boolean = false,
+    val isEncrypted: Boolean = false,
+    val protocol: String = if (isEncrypted) "E2EE_RCS" else if (isRcs) "RCS" else "SMS",
+    val groupTitle: String? = null
 ) {
     fun toMap(): Map<String, Any?> = mapOf(
         "id" to id,
@@ -51,6 +63,10 @@ data class SmsPayload(
         "isGroup" to isGroup,
         "recipients" to recipients,
         "attachmentData" to (attachmentData ?: ""),
+        "isRcs" to isRcs,
+        "isEncrypted" to isEncrypted,
+        "protocol" to protocol,
+        "groupTitle" to (groupTitle ?: ""),
         "type" to "sms"
     )
 }
@@ -66,7 +82,11 @@ data class SmsMessageItem(
     val isRead: Boolean = true,
     val attachmentUrl: String? = null,
     val attachmentMime: String? = null,
-    val attachmentData: String? = null // Base64 data URI (e.g. data:image/jpeg;base64,...)
+    val attachmentData: String? = null, // Base64 data URI (e.g. data:image/jpeg;base64,...)
+    val isRcs: Boolean = false,
+    val isEncrypted: Boolean = false,
+    val protocol: String = if (isEncrypted) "E2EE_RCS" else if (isRcs) "RCS" else "SMS",
+    val status: String? = null // "delivered", "read", "sent"
 ) {
     fun toMap(): Map<String, Any?> = mapOf(
         "id" to id,
@@ -79,7 +99,11 @@ data class SmsMessageItem(
         "isRead" to isRead,
         "attachmentUrl" to (attachmentUrl ?: ""),
         "attachmentMime" to (attachmentMime ?: ""),
-        "attachmentData" to (attachmentData ?: "")
+        "attachmentData" to (attachmentData ?: ""),
+        "isRcs" to isRcs,
+        "isEncrypted" to isEncrypted,
+        "protocol" to protocol,
+        "status" to (status ?: "")
     )
 }
 
@@ -93,7 +117,12 @@ data class SmsConversationThread(
     val isGroup: Boolean = false,
     val groupTitle: String? = null,
     val recipients: List<Map<String, String>> = emptyList(),
-    val messages: Map<String, Any?> = emptyMap()
+    val messages: Map<String, Any?> = emptyMap(),
+    val isRcs: Boolean = false,
+    val isEncrypted: Boolean = false,
+    val protocol: String = if (isEncrypted) "E2EE_RCS" else if (isRcs) "RCS" else "SMS",
+    val isTyping: Boolean = false,
+    val typingSender: String? = null
 ) {
     fun toMap(): Map<String, Any?> = mapOf(
         "threadId" to threadId,
@@ -105,7 +134,12 @@ data class SmsConversationThread(
         "isGroup" to isGroup,
         "groupTitle" to (groupTitle ?: ""),
         "recipients" to recipients,
-        "messages" to messages
+        "messages" to messages,
+        "isRcs" to isRcs,
+        "isEncrypted" to isEncrypted,
+        "protocol" to protocol,
+        "isTyping" to isTyping,
+        "typingSender" to (typingSender ?: "")
     )
 }
 
@@ -122,13 +156,3 @@ data class DeviceContactItem(
         "cleanDigits" to cleanDigits
     )
 }
-
-data class PeerDeviceState(
-    val deviceId: String,
-    val name: String,
-    val role: DeviceRole,
-    val online: Boolean,
-    val lastHeartbeat: Long,
-    val model: String = "",
-    val isPrimaryTelephony: Boolean = false
-)

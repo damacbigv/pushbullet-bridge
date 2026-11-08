@@ -59,6 +59,66 @@ body[data-theme="minimalist"] {
   --success-color: #10b981;
 }
 
+[data-theme="cyberpunk"],
+body[data-theme="cyberpunk"] {
+  --bg-color: #050508;
+  --surface-color: #0e0e18;
+  --border-color: #22223b;
+  --text-main: #ffffff;
+  --text-muted: #00f0ff;
+  --primary-color: #ffe600;
+  --primary-hover: #e6ce00;
+  --success-color: #00f0ff;
+}
+
+[data-theme="indigo"],
+body[data-theme="indigo"] {
+  --bg-color: #08081a;
+  --surface-color: #101030;
+  --border-color: #2a2b6e;
+  --text-main: #f5f3ff;
+  --text-muted: #a5b4fc;
+  --primary-color: #6366f1;
+  --primary-hover: #4f46e5;
+  --success-color: #818cf8;
+}
+
+[data-theme="emeraldsunset"],
+body[data-theme="emeraldsunset"] {
+  --bg-color: #06130e;
+  --surface-color: #0b241b;
+  --border-color: #1b4d3e;
+  --text-main: #fffbeb;
+  --text-muted: #fcd34d;
+  --primary-color: #f59e0b;
+  --primary-hover: #d97706;
+  --success-color: #10b981;
+}
+
+[data-theme="crimson"],
+body[data-theme="crimson"] {
+  --bg-color: #150508;
+  --surface-color: #240a10;
+  --border-color: #4a121e;
+  --text-main: #fff1f2;
+  --text-muted: #fda4af;
+  --primary-color: #e11d48;
+  --primary-hover: #be123c;
+  --success-color: #f43f5e;
+}
+
+[data-theme="slate"],
+body[data-theme="slate"] {
+  --bg-color: #0f141c;
+  --surface-color: #18202c;
+  --border-color: #2a384c;
+  --text-main: #f8fafc;
+  --text-muted: #94a3b8;
+  --primary-color: #38bdf8;
+  --primary-hover: #0284c7;
+  --success-color: #0ea5e9;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;

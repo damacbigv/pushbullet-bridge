@@ -27,6 +27,10 @@ object PushBridgeSyncManager {
                     put("title", payload.title)
                     put("text", payload.text)
                     put("subText", payload.subText ?: "")
+                    put("isRcs", payload.isRcs)
+                    put("isEncrypted", payload.isEncrypted)
+                    put("isGroup", payload.isGroup)
+                    put("conversationTitle", payload.conversationTitle ?: "")
                     put("timestamp", payload.timestamp)
                     put("sourceDeviceId", getDeviceId(context))
                 }
@@ -48,6 +52,12 @@ object PushBridgeSyncManager {
                     put("timestamp", sms.timestamp)
                     put("sourceDeviceId", getDeviceId(context))
                     put("type", "sms")
+                    put("isRcs", sms.isRcs)
+                    put("isEncrypted", sms.isEncrypted)
+                    put("protocol", sms.protocol)
+                    put("isGroup", sms.isGroup)
+                    put("groupTitle", sms.groupTitle ?: "")
+                    put("recipients", org.json.JSONArray(sms.recipients))
                 }
 
                 postToRelay("/api/sync/notification", json.toString())

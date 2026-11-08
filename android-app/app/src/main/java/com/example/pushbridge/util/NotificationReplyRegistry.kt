@@ -111,6 +111,13 @@ object NotificationReplyRegistry {
     }
 
     /**
+     * Registers or aliases a reply action under a custom key (e.g. rcs_thread_<id>).
+     */
+    fun registerReplyAction(key: String, action: CachedReplyAction) {
+        actionCache[key] = action
+    }
+
+    /**
      * Removes cached reply action when notification is dismissed.
      */
     fun unregister(notificationKey: String) {

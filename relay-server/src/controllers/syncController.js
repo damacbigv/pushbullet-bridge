@@ -8,7 +8,19 @@ const syncEventQueue = [];
 
 export const postNotification = async (req, res) => {
   try {
-    const { sourceDeviceId, appName, title, text, subText, packageName, timestamp } = req.body;
+    const {
+      sourceDeviceId,
+      appName,
+      title,
+      text,
+      subText,
+      packageName,
+      isRcs = false,
+      isEncrypted = false,
+      isGroup = false,
+      conversationTitle = '',
+      timestamp
+    } = req.body;
 
     if (!title && !text) {
       return res.status(400).json({ error: 'Title or text required.' });
@@ -23,6 +35,10 @@ export const postNotification = async (req, res) => {
       title: title || '',
       text: text || '',
       subText: subText || '',
+      isRcs: Boolean(isRcs),
+      isEncrypted: Boolean(isEncrypted),
+      isGroup: Boolean(isGroup),
+      conversationTitle: conversationTitle || '',
       timestamp: timestamp || Date.now()
     };
 
@@ -51,7 +67,19 @@ export const postNotification = async (req, res) => {
 
 export const postSms = async (req, res) => {
   try {
-    const { sourceDeviceId, targetDeviceId, recipient, message } = req.body;
+    const {
+      sourceDeviceId,
+      targetDeviceId,
+      recipient,
+      message,
+      threadId = 0,
+      isGroup = false,
+      groupTitle = '',
+      recipients = [],
+      isRcs = false,
+      isEncrypted = false,
+      protocol = 'SMS'
+    } = req.body;
 
     if (!recipient || !message) {
       return res.status(400).json({ error: 'Recipient and message required.' });
@@ -65,6 +93,13 @@ export const postSms = async (req, res) => {
       targetDeviceId: targetDeviceId || 'android',
       recipient,
       message,
+      threadId: Number(threadId) || 0,
+      isGroup: Boolean(isGroup),
+      groupTitle: groupTitle || '',
+      recipients: Array.isArray(recipients) ? recipients : [],
+      isRcs: Boolean(isRcs),
+      isEncrypted: Boolean(isEncrypted),
+      protocol: protocol || 'SMS',
       timestamp: Date.now()
     };
 

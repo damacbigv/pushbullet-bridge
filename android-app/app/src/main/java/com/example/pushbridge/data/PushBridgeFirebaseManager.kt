@@ -449,6 +449,21 @@ object PushBridgeFirebaseManager {
                 val isGroup = snapshot.child("isGroup").getValue(Boolean::class.java) ?: false
                 val attachmentData = snapshot.child("attachment").getValue(String::class.java)
 
+                // 1. Check if thread has an active RCS session with RemoteInput capability
+                val rcsKey = "rcs_thread_$threadIdVal"
+                if (threadIdVal > 0 && NotificationReplyRegistry.canReply(rcsKey)) {
+                    val replyResult = NotificationReplyRegistry.executeRemoteReply(context, rcsKey, message)
+                    if (replyResult is ReplyResult.Success) {
+                        updateCommandStatus(
+                            snapshot.ref,
+                            "completed",
+                            "Dispatched natively via RCS session (${replyResult.packageName})"
+                        )
+                        syncSingleThread(context, threadIdVal)
+                        return
+                    }
+                }
+
                 // Extract recipient list for group broadcast
                 val recipientsSnap = snapshot.child("recipients")
                 val recipientsList = mutableListOf<String>()

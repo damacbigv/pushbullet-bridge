@@ -160,6 +160,7 @@ fun MainScreen(
                         }
                     )
                     ConversationThreadsPreviewCard(context)
+                    RcsProtocolCard()
                     ThemeShowcaseCard()
                     DiagnosticsCard(context, testStatusText) { newStatus ->
                         testStatusText = newStatus
@@ -212,6 +213,7 @@ fun MainScreen(
                     }
                 )
                 ConversationThreadsPreviewCard(context)
+                RcsProtocolCard()
                 ThemeShowcaseCard()
                 DiagnosticsCard(context, testStatusText) { newStatus ->
                     testStatusText = newStatus
@@ -459,7 +461,7 @@ private fun ConversationThreadsPreviewCard(context: Context) {
                     border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF0EA5E9))
                 ) {
                     Text(
-                        "v3.0.3",
+                        "v3.1.0",
                         modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
@@ -520,6 +522,56 @@ private fun ConversationThreadsPreviewCard(context: Context) {
 }
 
 @Composable
+private fun RcsProtocolCard() {
+    val rcsThreads = remember { com.example.pushbridge.data.RcsConversationManager.getAllRcsThreads() }
+    val e2eeCount = rcsThreads.count { it.isEncrypted }
+    val groupRcsCount = rcsThreads.count { it.isGroup }
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("RCS & E2EE ENCRYPTION SPEC", style = MaterialTheme.typography.labelSmall, color = Color(0xFF10B981))
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = Color(0xFF10B981).copy(alpha = 0.2f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF10B981))
+                ) {
+                    Text(
+                        "ACTIVE (V3.1)",
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF6EE7B7)
+                    )
+                }
+            }
+            Text(
+                "Active MessagingStyle notification hooks intercept Google Messages RCS data packets, end-to-end encrypted chats, and family group conversations.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+            )
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Active RCS Threads:", style = MaterialTheme.typography.bodyMedium)
+                Text("${rcsThreads.size} threads (${e2eeCount} E2EE, ${groupRcsCount} groups)", fontWeight = FontWeight.SemiBold, color = Color(0xFF10B981))
+            }
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("RCS Reply Architecture:", style = MaterialTheme.typography.bodyMedium)
+                Text("Native RemoteInput RCS", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Medium)
+            }
+        }
+    }
+}
+
+@Composable
 private fun ThemeShowcaseCard() {
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -532,21 +584,21 @@ private fun ThemeShowcaseCard() {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("UI THEME ENGINE (V3.0.3)", style = MaterialTheme.typography.labelSmall, color = Color(0xFF0EA5E9))
-                Text("WCAG AA / AAA", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF10B981))
+                Text("UI THEME ENGINE (10 THEMES)", style = MaterialTheme.typography.labelSmall, color = Color(0xFF0EA5E9))
+                Text("WCAG AAA", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF10B981))
             }
             Text(
-                "Dynamic themes synchronized across Android companion & Chrome extension dashboards with compliant contrast ratios:",
+                "High-contrast vibrant palettes including Cyberpunk Neon, Electric Indigo, Emerald Sunset, Crimson Velvet, and Modern Slate:",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
             )
 
             val themes = listOf(
-                Triple("Midnight Dark", Color(0xFF090D16), Color(0xFF38BDF8)),
-                Triple("Solarized Clean", Color(0xFFFDF6E3), Color(0xFF268BD2)),
-                Triple("Emerald Forest", Color(0xFF04140E), Color(0xFF10B981)),
-                Triple("Sunset Neon", Color(0xFF12091F), Color(0xFFF43F5E)),
-                Triple("Classic Minimal", Color(0xFF0D0D0D), Color(0xFFE5E5E5))
+                Triple("Cyberpunk", Color(0xFF050508), Color(0xFF00F0FF)),
+                Triple("Indigo", Color(0xFF08081A), Color(0xFF6366F1)),
+                Triple("Em-Sunset", Color(0xFF06130E), Color(0xFFF59E0B)),
+                Triple("Crimson", Color(0xFF150508), Color(0xFFE11D48)),
+                Triple("Slate", Color(0xFF0F141C), Color(0xFF38BDF8))
             )
 
             Row(
@@ -572,7 +624,7 @@ private fun ThemeShowcaseCard() {
                             )
                         }
                         Text(
-                            name.substringBefore(" "),
+                            name,
                             fontSize = 9.sp,
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant

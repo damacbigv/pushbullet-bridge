@@ -275,7 +275,9 @@ object SmsRepository {
             )
         }
 
-        val sorted = resultThreads.sortedByDescending { it.lastTimestamp }
+        // 7. Merge with active and cached RCS / E2EE conversation threads
+        val mergedWithRcs = RcsConversationManager.mergeWithTelephonyThreads(context, resultThreads)
+        val sorted = mergedWithRcs.sortedByDescending { it.lastTimestamp }
         return if (sorted.size > maxThreads) sorted.take(maxThreads) else sorted
     }
 

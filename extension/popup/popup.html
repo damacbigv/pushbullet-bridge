@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PushBridge v2.5 - Notification & Threaded SMS Bridge</title>
+  <title>PushBridge v3.1 - Notification & Threaded SMS Bridge</title>
   <link rel="stylesheet" href="tailwind.css">
 </head>
 <body class="w-[780px] h-[590px] bg-slate-950 text-slate-100 flex flex-col font-sans select-none antialiased overflow-hidden">
@@ -18,7 +18,7 @@
       <div class="flex items-center gap-2">
         <h1 class="text-sm font-bold tracking-tight text-white flex items-center gap-1.5">
           PushBridge
-          <span class="text-[10px] font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/20 px-1.5 py-0.5 rounded">v3.0.3</span>
+          <span class="text-[10px] font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/20 px-1.5 py-0.5 rounded">v3.1.0</span>
         </h1>
       </div>
 
@@ -37,13 +37,18 @@
 
     <!-- Header Actions -->
     <div class="flex items-center gap-2">
-      <!-- Theme Selector Dropdown -->
+      <!-- Theme Selector Dropdown (10 Vibrant Palettes) -->
       <select id="theme-selector" class="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-lg px-2 py-1 outline-none focus:border-sky-500 cursor-pointer font-medium" title="Change Dashboard Theme">
-        <option value="midnight">🌙 Midnight</option>
-        <option value="solarized">☀️ Solarized</option>
-        <option value="emerald">🌲 Emerald</option>
-        <option value="sunset">🌆 Sunset</option>
-        <option value="minimalist">⚪ Minimal</option>
+        <option value="midnight">🌙 Midnight Dark</option>
+        <option value="solarized">☀️ Solarized Clean</option>
+        <option value="emerald">🌲 Emerald Forest</option>
+        <option value="sunset">🌆 Sunset Neon</option>
+        <option value="minimalist">⚪ Minimalist</option>
+        <option value="cyberpunk">⚡ Cyberpunk Neon</option>
+        <option value="indigo">🔮 Electric Indigo</option>
+        <option value="emeraldsunset">🌅 Emerald Sunset</option>
+        <option value="crimson">🍷 Crimson Velvet</option>
+        <option value="slate">🧊 Modern Slate</option>
       </select>
 
       <!-- Device Selector -->
@@ -209,6 +214,8 @@
               <div class="flex items-center gap-1.5">
                 <h2 id="chat-header-name" class="text-xs font-bold text-slate-100 truncate">Select a conversation</h2>
                 <span id="chat-group-badge" class="hidden text-[10px] bg-purple-500/10 text-purple-300 border border-purple-500/20 px-1.5 py-0.2 rounded font-medium shrink-0">Group</span>
+                <span id="chat-rcs-badge" class="hidden text-[10px] bg-sky-500/10 text-sky-400 border border-sky-500/20 px-1.5 py-0.2 rounded font-medium shrink-0">RCS Chat</span>
+                <span id="chat-encrypted-badge" class="hidden text-[10px] bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 px-1.5 py-0.2 rounded font-medium shrink-0 flex items-center gap-0.5">🔒 E2EE</span>
               </div>
               <p id="chat-header-phone" class="text-[10px] text-slate-400 font-mono truncate"></p>
               <!-- Multi-recipient Chips Bar (For Group Chats) -->
@@ -221,6 +228,16 @@
               Android SIM Active
             </span>
           </div>
+        </div>
+
+        <!-- RCS Typing Status Indicator Strip -->
+        <div id="chat-typing-notice" class="hidden px-4 py-1.5 bg-emerald-950/40 text-[11px] text-emerald-300 border-b border-emerald-900/40 flex items-center gap-2">
+          <span class="inline-flex gap-1 items-center">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce"></span>
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce [animation-delay:0.2s]"></span>
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce [animation-delay:0.4s]"></span>
+          </span>
+          <span id="chat-typing-text">Contact is typing...</span>
         </div>
 
         <!-- New Message Recipient Bar (Visible only when composing to new contact) -->

@@ -727,25 +727,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         case 'SEND_CHAT_MESSAGE': {
-          const { targetDeviceId, threadId, recipient, messageBody, attachment, attachmentData, attachmentMime, isGroup, recipients } = message;
+          const { targetDeviceId, threadId, recipient, messageBody, attachment, attachmentData, attachmentMime, isGroup, recipients, isRcs, isEncrypted, protocol } = message;
           const targetUrl = `${RTDB_BASE_URL}/devices/${targetDeviceId}/inbound_commands.json`;
 
           const rawAttachmentData = attachment?.base64 || attachment?.data || attachmentData || null;
           const rawAttachmentMime = attachment?.type || attachmentMime || null;
-
-          const commandPayload = {
-            type: 'SEND_SMS',
-            threadId: threadId || 0,
-            recipient,
-            isGroup: !!isGroup,
-            recipients: recipients || [],
-            message: messageBody,
-            attachment: attachment || null,
-            attachmentData: rawAttachmentData,
-            attachmentMime: rawAttachmentMime,
-            timestamp: Date.now(),
-            status: 'pending'
-          };
 
           // Optimistically update local thread storage so outgoing chat bubble appears instantly
           const { smsThreads = {} } = await chrome.storage.local.get('smsThreads');
@@ -759,6 +745,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             messages: {}
           };
 
+          const effectiveIsRcs = !!(isRcs || existingThread.isRcs);
+          const effectiveIsEncrypted = !!(isEncrypted || existingThread.isEncrypted);
+          const effectiveProtocol = protocol || existingThread.protocol || (effectiveIsEncrypted ? 'E2EE_RCS' : (effectiveIsRcs ? 'RCS' : 'SMS'));
+
+          const commandPayload = {
+            type: 'SEND_SMS',
+            threadId: threadId || 0,
+            recipient,
+            isGroup: !!isGroup,
+            recipients: recipients || [],
+            isRcs: effectiveIsRcs,
+            isEncrypted: effectiveIsEncrypted,
+            protocol: effectiveProtocol,
+            message: messageBody,
+            attachment: attachment || null,
+            attachmentData: rawAttachmentData,
+            attachmentMime: rawAttachmentMime,
+            timestamp: Date.now(),
+            status: 'pending'
+          };
+
           const localMsgId = `local_out_${Date.now()}`;
           const newMsg = {
             id: localMsgId,
@@ -770,12 +777,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             timestamp: Date.now(),
             isIncoming: false,
             isRead: true,
+            isRcs: effectiveIsRcs,
+            isEncrypted: effectiveIsEncrypted,
+            protocol: effectiveProtocol,
             pending: true
           };
 
           existingThread.messages = { ...existingThread.messages, [localMsgId]: newMsg };
           existingThread.snippet = messageBody || (rawAttachmentData ? '📷 [Photo]' : '');
           existingThread.lastTimestamp = Date.now();
+          if (effectiveIsRcs) existingThread.isRcs = true;
+          if (effectiveIsEncrypted) existingThread.isEncrypted = true;
+          if (effectiveProtocol) existingThread.protocol = effectiveProtocol;
 
           const updatedThreads = { ...smsThreads, [threadKey]: existingThread };
           await chrome.storage.local.set({ smsThreads: updatedThreads });
