@@ -118,6 +118,13 @@ object NotificationReplyRegistry {
     }
 
     /**
+     * Retrieves a cached reply action by key or alias.
+     */
+    fun getReplyAction(key: String): CachedReplyAction? {
+        return actionCache[key]
+    }
+
+    /**
      * Removes cached reply action when notification is dismissed.
      */
     fun unregister(notificationKey: String) {

@@ -275,6 +275,21 @@ async function handleIncomingNotification(notif, sourceDeviceId, shouldTriggerAl
   // Trigger Native Desktop Toast via Chrome Notifications API
   if (shouldTriggerAlert) {
     await showDesktopToast(item);
+
+    // If incoming notification is from a messaging app, trigger a background SMS thread fetch
+    if (item.isMessagingApp || item.packageName === 'com.google.android.apps.messaging') {
+      const devId = sourceDeviceId || 'android_companion';
+      fetch(`${RTDB_BASE_URL}/devices/${devId}/inbound_commands.json`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'SYNC_SMS_THREADS',
+          limit: 100,
+          timestamp: Date.now(),
+          status: 'pending'
+        })
+      }).catch(() => {});
+    }
   }
 }
 
@@ -298,6 +313,84 @@ async function handleIncomingSms(sms, sourceDeviceId, shouldTriggerAlert = true)
   };
 
   await handleIncomingNotification(notifLike, sourceDeviceId, shouldTriggerAlert);
+
+  // Optimistically insert incoming SMS/RCS message into smsThreads in memory & storage
+  try {
+    const { smsThreads = {} } = await chrome.storage.local.get('smsThreads');
+
+    // Look for existing matching thread by threadId, groupTitle, or sender
+    let matchedThreadKey = null;
+    if (sms.threadId && sms.threadId > 0 && smsThreads[String(sms.threadId)]) {
+      matchedThreadKey = String(sms.threadId);
+    } else {
+      for (const [key, t] of Object.entries(smsThreads)) {
+        if (!t) continue;
+        if (sms.threadId && String(t.threadId) === String(sms.threadId)) {
+          matchedThreadKey = key;
+          break;
+        }
+        if (sms.groupTitle && t.groupTitle && t.groupTitle.toLowerCase().trim() === sms.groupTitle.toLowerCase().trim()) {
+          matchedThreadKey = key;
+          break;
+        }
+        if (sms.sender && t.address && t.address.includes(sms.sender)) {
+          matchedThreadKey = key;
+          break;
+        }
+      }
+    }
+
+    const threadKey = matchedThreadKey || String(
+      sms.threadId ||
+      (sms.groupTitle ? Math.abs(sms.groupTitle.split('').reduce((a, b) => (((a << 5) - a) + b.charCodeAt(0)) | 0, 0)) : '') ||
+      Math.abs((sms.sender || 'unknown').split('').reduce((a, b) => (((a << 5) - a) + b.charCodeAt(0)) | 0, 0))
+    );
+
+    const existingThread = smsThreads[threadKey] || {
+      threadId: Number(threadKey) || Date.now(),
+      address: sms.sender || '',
+      contactName: sms.groupTitle || sms.sender || 'New Conversation',
+      isGroup: !!sms.isGroup,
+      groupTitle: sms.groupTitle || null,
+      messages: {}
+    };
+
+    const msgItem = {
+      id: sms.id,
+      threadId: existingThread.threadId,
+      address: sms.sender,
+      contactName: sms.sender,
+      body: sms.body,
+      timestamp: sms.timestamp || Date.now(),
+      isIncoming: true,
+      isRead: false,
+      isRcs: !!sms.isRcs,
+      isEncrypted: !!sms.isEncrypted,
+      protocol: sms.protocol || (sms.isEncrypted ? 'E2EE_RCS' : (sms.isRcs ? 'RCS' : 'SMS')),
+      attachmentData: sms.attachmentData || null
+    };
+
+    existingThread.messages = { ...(existingThread.messages || {}), [sms.id]: msgItem };
+    existingThread.snippet = sms.body;
+    existingThread.lastTimestamp = sms.timestamp || Date.now();
+    existingThread.unreadCount = (existingThread.unreadCount || 0) + 1;
+    if (sms.isGroup) {
+      existingThread.isGroup = true;
+      if (sms.groupTitle) {
+        existingThread.groupTitle = sms.groupTitle;
+        existingThread.contactName = sms.groupTitle;
+      }
+    }
+    if (sms.isRcs) existingThread.isRcs = true;
+    if (sms.isEncrypted) existingThread.isEncrypted = true;
+    if (sms.protocol) existingThread.protocol = sms.protocol;
+
+    const updated = { ...smsThreads, [threadKey]: existingThread };
+    await chrome.storage.local.set({ smsThreads: updated });
+    chrome.runtime.sendMessage({ type: 'SMS_THREADS_UPDATED', threads: updated }).catch(() => {});
+  } catch (e) {
+    console.error('[PushBridge SW] Error optimistically updating smsThreads on incoming SMS:', e);
+  }
 }
 
 /**

@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
+import android.provider.Telephony
 import android.service.notification.StatusBarNotification
 import android.util.Base64
 import android.util.Log
@@ -90,17 +91,36 @@ object RcsConversationManager {
         }
 
         // 1. Detect End-to-End Encryption & RCS Protocol indicators
-        val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
+        val rawTitle = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
         val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
         val subText = extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString() ?: ""
-        val conversationTitle = messagingStyle?.conversationTitle?.toString()
+        val rawConvTitle = messagingStyle?.conversationTitle?.toString()
             ?: extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)?.toString()
 
-        val hasLockIndicator = title.contains("🔒") || text.contains("🔒") || subText.contains("🔒") ||
-                (conversationTitle != null && conversationTitle.contains("🔒"))
+        val cleanTitle = rawTitle.replace("🔒", "").trim()
+        val cleanConvTitle = rawConvTitle?.replace("🔒", "")?.trim()
+
+        // Google Messages group notifications format: "<Group Name or Participants>: <Sender Name>"
+        // e.g. "Dad Valla Olliver II, Mom Bertha Olliver: Mom Bertha Olliver"
+        var parsedGroupTitle: String? = cleanConvTitle
+        var parsedSenderFromTitle: String? = null
+
+        if (cleanTitle.contains(":")) {
+            val candidateGroup = cleanTitle.substringBeforeLast(":").trim()
+            val candidateSender = cleanTitle.substringAfterLast(":").trim()
+            if (candidateGroup.isNotBlank()) {
+                if (parsedGroupTitle.isNullOrBlank()) {
+                    parsedGroupTitle = candidateGroup
+                }
+                parsedSenderFromTitle = candidateSender
+            }
+        }
+
+        val hasLockIndicator = rawTitle.contains("🔒") || text.contains("🔒") || subText.contains("🔒") ||
+                (rawConvTitle != null && rawConvTitle.contains("🔒"))
         val hasE2eeText = subText.contains("End-to-end encrypted", ignoreCase = true) ||
                 text.contains("End-to-end encrypted", ignoreCase = true) ||
-                title.contains("End-to-end encrypted", ignoreCase = true)
+                rawTitle.contains("End-to-end encrypted", ignoreCase = true)
 
         val isEncrypted = hasLockIndicator || hasE2eeText
         val isRcs = true // From Google/Samsung Messages MessagingStyle
@@ -111,34 +131,73 @@ object RcsConversationManager {
                 text.equals("Typing...", ignoreCase = true) ||
                 subText.contains("typing", ignoreCase = true)
         val typingSender = if (isTyping) {
-            if (text.contains("is typing")) text.substringBefore("is typing").trim() else title
+            if (text.contains("is typing")) text.substringBefore("is typing").trim() else (parsedSenderFromTitle ?: cleanTitle)
         } else null
 
         // 3. Multi-Member Group detection
         val isGroup = messagingStyle?.isGroupConversation == true ||
                 extras.getBoolean(Notification.EXTRA_IS_GROUP_CONVERSATION, false) ||
-                !conversationTitle.isNullOrBlank()
+                (!parsedGroupTitle.isNullOrBlank() && (parsedGroupTitle.contains(",") || parsedGroupTitle.contains("&")))
 
-        // 4. Stable Conversation & Thread ID Resolution
+        // 4. Resolve participant phone numbers from contacts for group threads
+        val participantsSet = mutableSetOf<String>()
+        val participantNames = mutableListOf<String>()
+
+        if (!parsedGroupTitle.isNullOrBlank() && (parsedGroupTitle.contains(",") || parsedGroupTitle.contains("&"))) {
+            val delimiters = Regex("[,&]+")
+            val names = parsedGroupTitle.split(delimiters).map { it.trim() }.filter { it.isNotBlank() }
+            participantNames.addAll(names)
+            for (name in names) {
+                val phone = SmsRepository.resolvePhoneNumberForContactName(context, name)
+                if (phone != null && phone.isNotBlank()) {
+                    participantsSet.add(phone)
+                }
+            }
+        }
+
+        // Try to look up existing Telephony thread ID for these participants
+        var resolvedTelephonyThreadId: Long? = null
+        if (participantsSet.size > 1) {
+            try {
+                val tid = Telephony.Threads.getOrCreateThreadId(context, participantsSet)
+                if (tid > 0) {
+                    resolvedTelephonyThreadId = tid
+                    Log.i(TAG, "Resolved RCS group '$parsedGroupTitle' to existing Telephony thread ID $tid via participants: $participantsSet")
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "Could not get Telephony thread ID for participants: ${e.message}")
+            }
+        }
+
+        // Stable Conversation & Thread ID Resolution
         val shortcutId = NotificationCompat.getShortcutId(notification)
         val conversationKey = shortcutId
-            ?: conversationTitle
+            ?: parsedGroupTitle
+            ?: cleanConvTitle
             ?: sbn.tag
-            ?: title.ifBlank { sbn.key }
+            ?: cleanTitle.ifBlank { sbn.key }
 
-        val threadId = conversationThreadIdMap.getOrPut(conversationKey) {
+        val threadId = resolvedTelephonyThreadId ?: conversationThreadIdMap.getOrPut(conversationKey) {
             // Allocate stable positive ID in the RCS range (8_000_000_000+)
             8000000000L + Math.abs(conversationKey.hashCode().toLong()) % 1000000000L
         }
 
-        // Register thread-specific RemoteInput reply alias
+        // Register thread-specific RemoteInput reply aliases
         NotificationReplyRegistry.extractAndRegisterReplyAction(sbn)?.let { action ->
             NotificationReplyRegistry.registerReplyAction("rcs_thread_$threadId", action)
+            if (shortcutId != null) {
+                NotificationReplyRegistry.registerReplyAction("rcs_thread_$shortcutId", action)
+            }
+            if (resolvedTelephonyThreadId != null) {
+                conversationThreadIdMap[conversationKey] = resolvedTelephonyThreadId
+            }
+            if (!parsedGroupTitle.isNullOrBlank()) {
+                conversationThreadIdMap[parsedGroupTitle] = threadId
+            }
         }
 
         // 5. Parse Messages & Media Attachments from MessagingStyle
         val parsedMessages = mutableListOf<SmsMessageItem>()
-        val participantsSet = mutableSetOf<String>()
 
         val styleMessages = messagingStyle?.messages ?: emptyList()
         if (styleMessages.isNotEmpty()) {
@@ -146,10 +205,13 @@ object RcsConversationManager {
                 val msgText = m.text?.toString() ?: ""
                 val msgTime = if (m.timestamp > 0) m.timestamp else sbn.postTime
                 val person = m.person
-                val senderName = person?.name?.toString() ?: title.ifBlank { "Participant" }
+                val senderName = person?.name?.toString() ?: parsedSenderFromTitle ?: cleanTitle.ifBlank { "Participant" }
                 val senderUri = person?.uri?.toString() ?: ""
-                val cleanAddress = SmsRepository.normalizePhoneNumber(senderUri.removePrefix("tel:"))
+                var cleanAddress = SmsRepository.normalizePhoneNumber(senderUri.removePrefix("tel:"))
 
+                if (cleanAddress.isBlank()) {
+                    cleanAddress = SmsRepository.resolvePhoneNumberForContactName(context, senderName) ?: ""
+                }
                 if (cleanAddress.isNotBlank()) participantsSet.add(cleanAddress)
 
                 var attachmentData: String? = null
@@ -183,13 +245,15 @@ object RcsConversationManager {
         // Fallback if MessagingStyle.messages is empty: parse from current notification text
         if (parsedMessages.isEmpty() && text.isNotBlank()) {
             val msgTime = sbn.postTime
-            val msgId = "rcs_${msgTime}_${Math.abs(title.hashCode())}"
+            val senderName = parsedSenderFromTitle ?: cleanTitle.ifBlank { "RCS Contact" }
+            val cleanAddr = SmsRepository.resolvePhoneNumberForContactName(context, senderName) ?: senderName
+            val msgId = "rcs_${msgTime}_${Math.abs(cleanTitle.hashCode())}"
             parsedMessages.add(
                 SmsMessageItem(
                     id = msgId,
                     threadId = threadId,
-                    address = title.ifBlank { "RCS Contact" },
-                    contactName = title.ifBlank { "RCS Contact" },
+                    address = cleanAddr,
+                    contactName = senderName,
                     body = text,
                     timestamp = msgTime,
                     isIncoming = true,
@@ -204,7 +268,7 @@ object RcsConversationManager {
         val latest = parsedMessages.lastOrNull() ?: SmsMessageItem(
             id = "rcs_${sbn.postTime}",
             threadId = threadId,
-            address = title,
+            address = cleanTitle,
             body = text,
             timestamp = sbn.postTime,
             isRcs = true,
@@ -220,7 +284,7 @@ object RcsConversationManager {
             updatedMessages[msg.id] = msg.toMap()
         }
 
-        val groupTitleFinal = conversationTitle ?: if (isGroup) title else null
+        val groupTitleFinal = parsedGroupTitle ?: cleanConvTitle ?: if (isGroup) cleanTitle else null
 
         // Build recipients list
         val recipientsList = mutableListOf<Map<String, String>>()
@@ -236,20 +300,36 @@ object RcsConversationManager {
                     )
                 )
             }
-        } else if (title.isNotBlank()) {
+        } else if (participantNames.isNotEmpty()) {
+            for (name in participantNames) {
+                recipientsList.add(
+                    mapOf(
+                        "phone" to name,
+                        "name" to name,
+                        "cleanDigits" to name.replace(Regex("\\D"), "")
+                    )
+                )
+            }
+        } else if (cleanTitle.isNotBlank()) {
             recipientsList.add(
                 mapOf(
-                    "phone" to title,
-                    "name" to title,
-                    "cleanDigits" to title.replace(Regex("\\D"), "")
+                    "phone" to cleanTitle,
+                    "name" to cleanTitle,
+                    "cleanDigits" to cleanTitle.replace(Regex("\\D"), "")
                 )
             )
         }
 
+        val displayAddress = if (recipientsList.isNotEmpty()) {
+            recipientsList.joinToString(", ") { it["phone"] ?: "" }
+        } else {
+            cleanTitle.ifBlank { conversationKey }
+        }
+
         val updatedThread = SmsConversationThread(
             threadId = threadId,
-            address = title.ifBlank { conversationKey },
-            contactName = groupTitleFinal ?: title,
+            address = displayAddress,
+            contactName = groupTitleFinal ?: cleanTitle,
             snippet = latest.body,
             lastTimestamp = latest.timestamp,
             unreadCount = (existingThread?.unreadCount ?: 0) + 1,
@@ -268,6 +348,7 @@ object RcsConversationManager {
 
         val smsPayload = SmsPayload(
             id = latest.id,
+            threadId = threadId,
             sender = latest.contactName ?: latest.address,
             body = latest.body,
             timestamp = latest.timestamp,
@@ -280,7 +361,7 @@ object RcsConversationManager {
             groupTitle = groupTitleFinal
         )
 
-        Log.i(TAG, "Intercepted RCS ($protocol) message from '${smsPayload.sender}' (Thread $threadId, isGroup=$isGroup, isEncrypted=$isEncrypted)")
+        Log.i(TAG, "Intercepted RCS ($protocol) message from '${smsPayload.sender}' (Thread $threadId, isGroup=$isGroup, groupTitle='$groupTitleFinal')")
 
         return RcsInterceptResult(
             isRcs = true,
@@ -305,11 +386,20 @@ object RcsConversationManager {
             val tThread = mergedList[i]
             val cleanAddr = SmsRepository.normalizePhoneNumber(tThread.address)
 
-            // Look for matching RCS thread by address or title
+            // Look for matching RCS thread by threadId, address, groupTitle, or contactName
             val matchingRcs = rcsThreads.values.firstOrNull { rcs ->
                 rcs.threadId == tThread.threadId ||
                         (cleanAddr.isNotBlank() && cleanAddr == SmsRepository.normalizePhoneNumber(rcs.address)) ||
-                        (!rcs.groupTitle.isNullOrBlank() && rcs.groupTitle.equals(tThread.groupTitle, ignoreCase = true))
+                        (!rcs.groupTitle.isNullOrBlank() && (
+                                rcs.groupTitle.equals(tThread.groupTitle, ignoreCase = true) ||
+                                tThread.contactName?.equals(rcs.groupTitle, ignoreCase = true) == true ||
+                                rcs.groupTitle?.contains(tThread.groupTitle ?: "___", ignoreCase = true) == true ||
+                                tThread.groupTitle?.contains(rcs.groupTitle ?: "___", ignoreCase = true) == true
+                        )) ||
+                        (!rcs.contactName.isNullOrBlank() && (
+                                rcs.contactName.equals(tThread.groupTitle, ignoreCase = true) ||
+                                rcs.contactName.equals(tThread.contactName, ignoreCase = true)
+                        ))
             }
 
             if (matchingRcs != null) {
@@ -330,6 +420,11 @@ object RcsConversationManager {
                     groupTitle = tThread.groupTitle ?: matchingRcs.groupTitle,
                     isGroup = tThread.isGroup || matchingRcs.isGroup
                 )
+
+                // Register reply action alias under the Telephony thread ID as well
+                NotificationReplyRegistry.getReplyAction("rcs_thread_${matchingRcs.threadId}")?.let { action ->
+                    NotificationReplyRegistry.registerReplyAction("rcs_thread_${tThread.threadId}", action)
+                }
             }
         }
 

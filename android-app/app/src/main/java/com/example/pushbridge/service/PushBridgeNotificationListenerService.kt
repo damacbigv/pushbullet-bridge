@@ -188,9 +188,13 @@ class PushBridgeNotificationListenerService : NotificationListenerService() {
         // Process RCS message packets, E2EE indicators, and MessagingStyle history
         val rcsResult = com.example.pushbridge.data.RcsConversationManager.interceptAndProcess(applicationContext, sbn)
         if (rcsResult != null) {
-            // Push immediate RCS message to Firebase and sync thread
+            // 1. Push immediate RCS message to Firebase outbound_sms
             PushBridgeFirebaseManager.pushIncomingSms(applicationContext, rcsResult.smsPayload)
-            PushBridgeFirebaseManager.syncSingleThread(applicationContext, rcsResult.thread.threadId)
+            // 2. Directly write full thread to Firebase sms_threads so it immediately appears in Chrome/Tablet!
+            PushBridgeFirebaseManager.syncThreadDirectly(applicationContext, rcsResult.thread)
+            // 3. Refresh entire threads map with full limit to keep all conversations up-to-date
+            PushBridgeFirebaseManager.syncAllSmsThreads(applicationContext, limit = maxOf(PushBridgeFirebaseManager.currentPaginationLimit, 100))
+            // 4. Fallback express relay service
             PushBridgeSyncManager.syncIncomingSms(applicationContext, rcsResult.smsPayload)
         }
 

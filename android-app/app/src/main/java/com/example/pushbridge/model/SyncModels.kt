@@ -44,6 +44,7 @@ data class NotificationPayload(
 
 data class SmsPayload(
     val id: String,
+    val threadId: Long = 0L,
     val sender: String,
     val body: String,
     val timestamp: Long = System.currentTimeMillis(),
@@ -57,6 +58,7 @@ data class SmsPayload(
 ) {
     fun toMap(): Map<String, Any?> = mapOf(
         "id" to id,
+        "threadId" to threadId,
         "sender" to sender,
         "body" to body,
         "timestamp" to timestamp,

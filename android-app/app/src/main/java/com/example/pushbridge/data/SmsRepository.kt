@@ -741,6 +741,40 @@ object SmsRepository {
     }
 
     /**
+     * Resolves contact name to their canonical phone number from the device address book.
+     */
+    fun resolvePhoneNumberForContactName(context: Context, contactName: String): String? {
+        if (contactName.isBlank() || !PermissionUtils.hasContactsReadPermission(context)) {
+            return null
+        }
+
+        return try {
+            val projection = arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER)
+            val selection = "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} = ? OR ${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?"
+            val selectionArgs = arrayOf(contactName.trim(), "%${contactName.trim()}%")
+
+            val cursor = context.contentResolver.query(
+                ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                projection,
+                selection,
+                selectionArgs,
+                null
+            )
+
+            cursor?.use {
+                if (it.moveToFirst()) {
+                    val rawNum = it.getString(it.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER)) ?: ""
+                    val normalized = normalizePhoneNumber(rawNum)
+                    if (normalized.isNotBlank()) normalized else null
+                } else null
+            }
+        } catch (e: Exception) {
+            Log.d(TAG, "Could not resolve phone number for contact '$contactName': ${e.message}")
+            null
+        }
+    }
+
+    /**
      * Queries device address book contacts to provide fast local sync to Firebase.
      */
     fun queryDeviceContacts(context: Context, limit: Int = 300): List<DeviceContactItem> {

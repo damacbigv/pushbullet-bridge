@@ -8,6 +8,7 @@ import android.util.Log
 import com.example.pushbridge.BuildConfig
 import com.example.pushbridge.model.DeviceRole
 import com.example.pushbridge.model.NotificationPayload
+import com.example.pushbridge.model.SmsConversationThread
 import com.example.pushbridge.model.SmsPayload
 import com.example.pushbridge.util.NotificationReplyRegistry
 import com.example.pushbridge.util.PermissionUtils
@@ -314,6 +315,32 @@ object PushBridgeFirebaseManager {
     }
 
     /**
+     * Directly writes a specific conversation thread object to Firebase Realtime Database.
+     * Guarantees instantaneous delivery without querying the SQLite Telephony provider.
+     */
+    fun syncThreadDirectly(context: Context, thread: SmsConversationThread, onComplete: (() -> Unit)? = null) {
+        if (thread.threadId <= 0) return
+        scope.launch {
+            if (!isInitialized) initialize(context)
+            val deviceId = getDeviceId(context)
+            val threadRef = database?.getReference("devices")
+                ?.child(deviceId)
+                ?.child("sms_threads")
+                ?.child(thread.threadId.toString()) ?: return@launch
+
+            threadRef.setValue(thread.toMap())
+                .addOnSuccessListener {
+                    Log.i(TAG, "Directly synced thread ${thread.threadId} ('${thread.contactName}', isGroup=${thread.isGroup}) to Firebase.")
+                    touchHeartbeat(context)
+                    onComplete?.invoke()
+                }
+                .addOnFailureListener { err ->
+                    Log.w(TAG, "Failed directly syncing thread ${thread.threadId}: ${err.message}")
+                }
+        }
+    }
+
+    /**
      * Synchronizes a single SMS conversation thread to Firebase Realtime Database.
      * Fast targeted sync for real-time group message updates.
      */
@@ -322,7 +349,26 @@ object PushBridgeFirebaseManager {
         scope.launch {
             if (!isInitialized) initialize(context)
             val deviceId = getDeviceId(context)
-            val threads = SmsRepository.queryConversationThreads(context, maxThreads = currentPaginationLimit)
+
+            // 1. Check in-memory RCS conversation cache first for instant sync
+            val rcsThread = RcsConversationManager.getRcsThread(threadId)
+            if (rcsThread != null) {
+                val threadRef = database?.getReference("devices")
+                    ?.child(deviceId)
+                    ?.child("sms_threads")
+                    ?.child(threadId.toString()) ?: return@launch
+
+                threadRef.setValue(rcsThread.toMap())
+                    .addOnSuccessListener {
+                        Log.i(TAG, "Successfully synced cached RCS thread $threadId to Firebase.")
+                        touchHeartbeat(context)
+                        onComplete?.invoke()
+                    }
+                return@launch
+            }
+
+            // 2. Query Telephony threads with high limit (100) to find the thread
+            val threads = SmsRepository.queryConversationThreads(context, maxThreads = 100)
             val target = threads.firstOrNull { it.threadId == threadId }
             if (target != null) {
                 val threadRef = database?.getReference("devices")
@@ -340,7 +386,7 @@ object PushBridgeFirebaseManager {
                         Log.w(TAG, "Failed syncing single thread $threadId: ${err.message}")
                     }
             } else {
-                syncAllSmsThreads(context)
+                syncAllSmsThreads(context, limit = 100)
             }
         }
     }
