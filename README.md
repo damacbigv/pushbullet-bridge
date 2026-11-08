@@ -1,29 +1,32 @@
-# PushBridge v3.0.1
+# PushBridge v3.1.2
 
-> **Self-Hosted Cross-Platform Notification Mirroring, Scalable Threaded SMS, Group Chat Bridge & Multi-Device Tablet Companion**  
+> **Self-Hosted Cross-Platform Notification Mirroring, Scalable Threaded SMS, RCS & E2EE Group Chat Bridge & Multi-Device Companion**  
 > A private, modular alternative to Pushbullet connecting Google Chrome, Android phones, Wi-Fi tablets (e.g. Samsung Galaxy Tab S7), and cloud sync relays using Firebase as the real-time synchronization backend.
 
-[![Download Android APK](https://img.shields.io/badge/Download_APK-v3.0.1_(13_MB)-10B981?style=for-the-badge&logo=android&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/download/v3.0.1/PushBridge-v3.0.1.apk)
-[![GitHub Release](https://img.shields.io/badge/GitHub_Release-v3.0.1-6366F1?style=for-the-badge&logo=github&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v3.0.1)
-[![Chrome Extension](https://img.shields.io/badge/Chrome_Extension-Manifest_V3_(v3.0.1)-0EA5E9?style=for-the-badge&logo=googlechrome&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/tree/main/extension)
+[![Download Android APK](https://img.shields.io/badge/Download_APK-v3.1.2_(13_MB)-10B981?style=for-the-badge&logo=android&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/download/v3.1.2/PushBridge-v3.1.2.apk)
+[![GitHub Release](https://img.shields.io/badge/GitHub_Release-v3.1.2-6366F1?style=for-the-badge&logo=github&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v3.1.2)
+[![Chrome Extension](https://img.shields.io/badge/Chrome_Extension-Manifest_V3_(v3.1.2)-0EA5E9?style=for-the-badge&logo=googlechrome&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/tree/main/extension)
 
-📥 **Latest Release Page**: [GitHub Release v3.0.1](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v3.0.1)  
-📦 **Direct APK Download**: [PushBridge-v3.0.1.apk](https://github.com/damacbigv/pushbullet-bridge/releases/download/v3.0.1/PushBridge-v3.0.1.apk)
+📥 **Official GitHub Release Page**: [GitHub Release v3.1.2](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v3.1.2)  
+📦 **Direct APK Download**: [PushBridge-v3.1.2.apk](https://github.com/damacbigv/pushbullet-bridge/releases/download/v3.1.2/PushBridge-v3.1.2.apk)  
+📝 **Detailed Release Notes**: [`releases/release_notes_v3.1.2.md`](file:///Users/volliver/.gemini/antigravity/scratch/pushbullet-bridge/releases/release_notes_v3.1.2.md)
 
 ---
 
-## What's New in Version 3.0.1
+## What's New in Version 3.1.2
 
-### 1. Context-Aware Timestamp Formatting in SMS Thread List
-- **Current Calendar Date (Today)**: Threads with recent messages sent or received today display only the time (e.g., `3:42 PM` or `15:42` based on system locale settings).
-- **Older Dates**: Threads older than the current date display the day of the week combined with the month and year (e.g., `Wed, Nov 2026`).
+### 1. Hardened Android Conversation Sync Engine
+- **Zero UI Freezes**: Resolved OutOfMemoryError and hanging in *"Syncing Conversations..."* by capping MMS queries to the 150 most recent entries and bounding memory usage with `inSampleSize` downsampling (max $240 \times 240$ px, `RGB_565`).
+- **Guaranteed Completion**: Wrapped coroutines in strict `try / catch (t: Throwable)` to guarantee UI button reset with automatic 10-second safeguards.
 
-### 2. Interactive Hover Tooltips with Full Precision Timestamps
-- Native interactive hover tooltips on the timestamp element pop up immediately when hovering over the date string.
-- Displays the complete, exact timestamp including day of the week, full date, hour, minute, and second (e.g., `Wednesday, November 7, 2026 at 03:42:15 PM`).
+### 2. Multi-Member & Family Group Chat Auto-Injection
+- **Instant Thread Discovery**: Intercepts Google Messages group notifications (e.g., `"Dad Valla Olliver II, Mom Bertha Olliver: Mom Bertha Olliver"`), splits titles from sender names, and tokenizes address book contact resolution.
+- **Client-Side Live Injection**: Automatically injects incoming messaging notifications directly into `smsThreads` in memory and storage so family group threads immediately appear in the left-hand navigation list.
 
-### 3. Manifest V3 CSP Hardening
-- Replaced inline image error handlers with programmatic JavaScript listeners to fully conform with strict Manifest V3 `'script-src self'` Content Security Policies.
+### 3. Chrome Extension CORS & CSP Resolution
+- **HTTP/HTTPS Host Permissions**: Added `"http://*/*"` alongside `"https://*/*"` to resolve CORS errors on shortened links (`http://bit.ly/...`).
+- **Resilient Fallback Previews**: Caches domain cards if page fetches are blocked or timed out, eliminating repeated console error spam.
+- **Strict MV3 Compliance**: 100% programmatic event listeners without inline handlers.
 
 ---
 
@@ -65,7 +68,7 @@
 
 ```
 pushbullet-bridge/
-├── extension/          # Google Chrome Extension (Manifest V3 - v3.0.1)
+├── extension/          # Google Chrome Extension (Manifest V3 - v3.1.2)
 │   ├── manifest.json   # MV3 config with permissions & host permissions
 │   ├── background.js   # Service worker: Firebase SSE stream, device presence, OpenGraph fallback
 │   ├── firebase-config.js # Firebase Realtime Database configuration
@@ -77,7 +80,7 @@ pushbullet-bridge/
 │   │   └── tailwind.css# Standalone Tailwind CSS v4 styling
 │   └── icons/          # Multi-resolution icon set (16px, 48px, 128px)
 │
-├── android-app/        # Native Kotlin Android Companion App (Phone & Tablet - v3.0.1)
+├── android-app/        # Native Kotlin Android Companion App (Phone & Tablet - v3.1.2)
 │   ├── app/src/main/
 │   │   ├── AndroidManifest.xml # Non-telephony tablet support & large screen declarations
 │   │   └── java/com/example/pushbridge/
@@ -113,7 +116,7 @@ pushbullet-bridge/
 │   └── README.md
 │
 ├── releases/           # Pre-compiled binaries & distribution packages
-│   └── PushBridge-v3.0.1.apk
+│   └── PushBridge-v3.1.2.apk
 │
 ├── package.json        # Workspace orchestrator scripts
 └── README.md
@@ -139,7 +142,7 @@ pushbullet-bridge/
 
 ### 2. Android Companion App (Phone or Wi-Fi Tablet)
 
-1. Download **`PushBridge-v3.0.1.apk`** from [Releases](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v3.0.1) or copy from `releases/PushBridge-v3.0.1.apk`.
+1. Download **`PushBridge-v3.1.2.apk`** from [Releases](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v3.1.2) or copy from `releases/PushBridge-v3.1.2.apk`.
 2. On your Android phone or Samsung Galaxy Tab S7:
    - Allow installation from unknown sources if prompted.
    - Launch **PushBridge**.
