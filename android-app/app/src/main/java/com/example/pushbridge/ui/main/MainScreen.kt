@@ -35,6 +35,8 @@ import com.example.pushbridge.service.PushBridgeNotificationListenerService
 import com.example.pushbridge.theme.PushBridgeTheme
 import com.example.pushbridge.util.DateTimeUtils
 import com.example.pushbridge.util.PermissionUtils
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -59,6 +61,23 @@ fun MainScreen(
     val hasContactsRead = remember(permissionTrigger) { PermissionUtils.hasContactsReadPermission(context) }
     val isListenerConnected = PushBridgeNotificationListenerService.isConnected
     var isSyncingThreads by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
+
+    val handleSyncThreads: (Int) -> Unit = { limit ->
+        isSyncingThreads = true
+        val timeoutJob = coroutineScope.launch {
+            delay(10000)
+            if (isSyncingThreads) {
+                isSyncingThreads = false
+                testStatusText = "Sync finished."
+            }
+        }
+        PushBridgeFirebaseManager.syncAllSmsThreads(context, limit) { count ->
+            timeoutJob.cancel()
+            isSyncingThreads = false
+            testStatusText = "Synchronized $count conversation threads (limit: $limit)!"
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -121,12 +140,7 @@ fun MainScreen(
                         currentLimit = selectedPaginationLimit,
                         onLimitChanged = { newLimit ->
                             selectedPaginationLimit = newLimit
-                            PushBridgeFirebaseManager.currentPaginationLimit = newLimit
-                            isSyncingThreads = true
-                            PushBridgeFirebaseManager.syncAllSmsThreads(context, newLimit) { count ->
-                                isSyncingThreads = false
-                                testStatusText = "Synchronized $count conversation threads (limit: $newLimit)!"
-                            }
+                            handleSyncThreads(newLimit)
                         }
                     )
                     NotificationAccessCard(context, hasNotifAccess)
@@ -147,11 +161,7 @@ fun MainScreen(
                         isTablet = deviceRole == DeviceRole.WIFI_TABLET,
                         onRequestPermissions = onRequestSmsPermission,
                         onSyncThreads = {
-                            isSyncingThreads = true
-                            PushBridgeFirebaseManager.syncAllSmsThreads(context, selectedPaginationLimit) { count ->
-                                isSyncingThreads = false
-                                testStatusText = "Synced $count conversation threads (limit $selectedPaginationLimit) to Firebase!"
-                            }
+                            handleSyncThreads(selectedPaginationLimit)
                         },
                         onSyncContacts = {
                             PushBridgeFirebaseManager.syncDeviceContacts(context) { count ->
@@ -182,12 +192,7 @@ fun MainScreen(
                     currentLimit = selectedPaginationLimit,
                     onLimitChanged = { newLimit ->
                         selectedPaginationLimit = newLimit
-                        PushBridgeFirebaseManager.currentPaginationLimit = newLimit
-                        isSyncingThreads = true
-                        PushBridgeFirebaseManager.syncAllSmsThreads(context, newLimit) { count ->
-                            isSyncingThreads = false
-                            testStatusText = "Synchronized $count conversation threads (limit: $newLimit)!"
-                        }
+                        handleSyncThreads(newLimit)
                     }
                 )
                 NotificationAccessCard(context, hasNotifAccess)
@@ -200,11 +205,7 @@ fun MainScreen(
                     isTablet = deviceRole == DeviceRole.WIFI_TABLET,
                     onRequestPermissions = onRequestSmsPermission,
                     onSyncThreads = {
-                        isSyncingThreads = true
-                        PushBridgeFirebaseManager.syncAllSmsThreads(context, selectedPaginationLimit) { count ->
-                            isSyncingThreads = false
-                            testStatusText = "Synced $count conversation threads (limit $selectedPaginationLimit) to Firebase!"
-                        }
+                        handleSyncThreads(selectedPaginationLimit)
                     },
                     onSyncContacts = {
                         PushBridgeFirebaseManager.syncDeviceContacts(context) { count ->

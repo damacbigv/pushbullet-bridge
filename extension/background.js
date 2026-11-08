@@ -272,6 +272,16 @@ async function handleIncomingNotification(notif, sourceDeviceId, shouldTriggerAl
   // Notify active popup UI if open
   chrome.runtime.sendMessage({ type: 'NOTIFICATION_RECEIVED', notification: item }).catch(() => {});
 
+  // If this notification is from a messaging app (e.g. Google Messages, RCS, SMS, Samsung Messages),
+  // inject it into the local Threaded SMS cache so group and direct discussions appear immediately.
+  if (item.isMessagingApp ||
+      item.packageName === 'com.google.android.apps.messaging' ||
+      item.packageName === 'com.samsung.android.messaging' ||
+      item.packageName === 'com.verizon.messaging.vzmsgs' ||
+      item.packageName === 'com.android.mms') {
+    await injectNotificationIntoSmsThreads(item, sourceDeviceId);
+  }
+
   // Trigger Native Desktop Toast via Chrome Notifications API
   if (shouldTriggerAlert) {
     await showDesktopToast(item);
@@ -290,6 +300,123 @@ async function handleIncomingNotification(notif, sourceDeviceId, shouldTriggerAl
         })
       }).catch(() => {});
     }
+  }
+}
+
+/**
+ * Directly injects a messaging notification into local/storage smsThreads.
+ * Guarantees that Google Messages / RCS / E2EE / MMS group chats (e.g. family threads)
+ * immediately appear in the "Threaded SMS & Group Chat" tab.
+ */
+async function injectNotificationIntoSmsThreads(notif, sourceDeviceId) {
+  if (!notif || !notif.text) return;
+  try {
+    const { smsThreads = {} } = await chrome.storage.local.get('smsThreads');
+
+    const rawTitle = (notif.title || '').replace(/🔒/g, '').trim();
+    let groupTitle = null;
+    let senderName = rawTitle;
+    let isGroup = false;
+
+    // Google Messages group chat title format: "<Group or Members>: <Sender Name>"
+    // e.g. "Dad Valla Olliver II, Mom Bertha Olliver: Mom Bertha Olliver"
+    if (rawTitle.includes(':')) {
+      groupTitle = rawTitle.substring(0, rawTitle.lastIndexOf(':')).trim();
+      senderName = rawTitle.substring(rawTitle.lastIndexOf(':') + 1).trim();
+      isGroup = true;
+    } else if (rawTitle.includes(',') || rawTitle.includes('&')) {
+      groupTitle = rawTitle;
+      isGroup = true;
+    }
+
+    // Match existing thread in smsThreads
+    let matchedKey = null;
+    for (const [key, t] of Object.entries(smsThreads)) {
+      if (!t) continue;
+      if (groupTitle && t.groupTitle && (
+        t.groupTitle.toLowerCase().trim() === groupTitle.toLowerCase().trim() ||
+        t.groupTitle.toLowerCase().includes(groupTitle.toLowerCase().trim()) ||
+        groupTitle.toLowerCase().includes(t.groupTitle.toLowerCase().trim())
+      )) {
+        matchedKey = key;
+        break;
+      }
+      if (groupTitle && t.contactName && t.contactName.toLowerCase().trim() === groupTitle.toLowerCase().trim()) {
+        matchedKey = key;
+        break;
+      }
+      if (!isGroup && senderName && (
+        (t.contactName && t.contactName.toLowerCase().trim() === senderName.toLowerCase().trim()) ||
+        (t.address && t.address.includes(senderName))
+      )) {
+        matchedKey = key;
+        break;
+      }
+    }
+
+    // Generate stable thread ID if new
+    const threadKey = matchedKey || String(
+      8000000000 + Math.abs((groupTitle || senderName || notif.id).split('').reduce((a, b) => (((a << 5) - a) + b.charCodeAt(0)) | 0, 0))
+    );
+
+    const existingThread = smsThreads[threadKey] || {
+      threadId: Number(threadKey) || Date.now(),
+      address: groupTitle || senderName,
+      contactName: groupTitle || senderName,
+      snippet: notif.text,
+      lastTimestamp: notif.timestamp || Date.now(),
+      unreadCount: 0,
+      isGroup: isGroup,
+      groupTitle: groupTitle,
+      recipients: groupTitle ? groupTitle.split(/[,&]+/).map(n => ({
+        name: n.trim(),
+        phone: n.trim(),
+        cleanDigits: n.trim().replace(/\D/g, '')
+      })) : [{ name: senderName, phone: senderName, cleanDigits: senderName.replace(/\D/g, '') }],
+      messages: {},
+      isRcs: true,
+      protocol: 'RCS'
+    };
+
+    const msgId = `notif_msg_${notif.timestamp || Date.now()}_${Math.abs(senderName.split('').reduce((a, b) => (((a << 5) - a) + b.charCodeAt(0)) | 0, 0))}`;
+    const newMsg = {
+      id: msgId,
+      threadId: existingThread.threadId,
+      address: senderName,
+      contactName: senderName,
+      body: notif.text,
+      timestamp: notif.timestamp || Date.now(),
+      isIncoming: true,
+      isRead: false,
+      isRcs: true,
+      protocol: 'RCS'
+    };
+
+    const updatedMessages = {
+      ...(existingThread.messages || {}),
+      [msgId]: newMsg
+    };
+
+    const updatedThread = {
+      ...existingThread,
+      snippet: notif.text,
+      lastTimestamp: notif.timestamp || Date.now(),
+      unreadCount: (existingThread.unreadCount || 0) + 1,
+      messages: updatedMessages
+    };
+
+    const updatedThreads = {
+      ...smsThreads,
+      [threadKey]: updatedThread
+    };
+
+    await chrome.storage.local.set({ smsThreads: updatedThreads });
+    chrome.runtime.sendMessage({
+      type: 'SMS_THREADS_UPDATED',
+      threads: updatedThreads
+    }).catch(() => {});
+  } catch (err) {
+    console.warn('[PushBridge SW] Error injecting notification into smsThreads:', err.message);
   }
 }
 
@@ -975,6 +1102,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               }
             } catch (err) {
               console.warn('[PushBridge SW] Client link preview fetch fallback error:', err.message);
+            }
+          }
+
+          // 3. Resilient Domain Fallback (handles shortened URLs, CORS redirects, or offline domains without error loops)
+          if (!preview) {
+            try {
+              const urlObj = new URL(url);
+              const domain = urlObj.hostname.replace(/^www\./, '');
+              preview = {
+                url,
+                domain,
+                title: domain,
+                description: '',
+                image: null,
+                siteName: domain
+              };
+            } catch {
+              // Invalid URL format
             }
           }
 

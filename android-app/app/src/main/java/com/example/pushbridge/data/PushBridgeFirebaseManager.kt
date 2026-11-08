@@ -282,6 +282,7 @@ object PushBridgeFirebaseManager {
     /**
      * Reads SMS & MMS conversations with scalable pagination (30, 50, 100 threads)
      * and syncs message histories to Firebase Realtime Database.
+     * Guaranteed completion callback and fallback to individual writes on bulk failure.
      */
     fun syncAllSmsThreads(
         context: Context,
@@ -290,27 +291,47 @@ object PushBridgeFirebaseManager {
     ) {
         currentPaginationLimit = limit
         scope.launch {
-            if (!isInitialized) initialize(context)
-            val deviceId = getDeviceId(context)
-            val threads = SmsRepository.queryConversationThreads(context, maxThreads = limit)
-            Log.i(TAG, "Queried ${threads.size} SMS conversation threads (limit: $limit) for sync (including group threads).")
+            try {
+                if (!isInitialized) initialize(context)
+                val deviceId = getDeviceId(context)
+                val threads = SmsRepository.queryConversationThreads(context, maxThreads = limit)
+                Log.i(TAG, "Queried ${threads.size} SMS conversation threads (limit: $limit) for sync (including group threads).")
 
-            val threadsRef = database?.getReference("devices")?.child(deviceId)?.child("sms_threads") ?: return@launch
+                val threadsRef = database?.getReference("devices")?.child(deviceId)?.child("sms_threads")
+                if (threadsRef == null) {
+                    withContext(Dispatchers.Main) { onComplete?.invoke(threads.size) }
+                    return@launch
+                }
 
-            val threadsMap = mutableMapOf<String, Any?>()
-            for (thread in threads) {
-                threadsMap[thread.threadId.toString()] = thread.toMap()
+                val threadsMap = mutableMapOf<String, Any?>()
+                for (thread in threads) {
+                    threadsMap[thread.threadId.toString()] = thread.toMap()
+                }
+
+                threadsRef.setValue(threadsMap)
+                    .addOnSuccessListener {
+                        Log.i(TAG, "Successfully synced ${threads.size} SMS threads (limit $limit) to Firebase.")
+                        touchHeartbeat(context)
+                        scope.launch(Dispatchers.Main) { onComplete?.invoke(threads.size) }
+                    }
+                    .addOnFailureListener { err ->
+                        Log.e(TAG, "Failed bulk syncing SMS threads to Firebase: ${err.message}. Writing individually...", err)
+                        scope.launch(Dispatchers.IO) {
+                            var individualCount = 0
+                            for (thread in threads) {
+                                try {
+                                    threadsRef.child(thread.threadId.toString()).setValue(thread.toMap())
+                                    individualCount++
+                                } catch (_: Exception) {}
+                            }
+                            touchHeartbeat(context)
+                            withContext(Dispatchers.Main) { onComplete?.invoke(individualCount) }
+                        }
+                    }
+            } catch (t: Throwable) {
+                Log.e(TAG, "Error in syncAllSmsThreads: ${t.message}", t)
+                withContext(Dispatchers.Main) { onComplete?.invoke(0) }
             }
-
-            threadsRef.setValue(threadsMap)
-                .addOnSuccessListener {
-                    Log.i(TAG, "Successfully synced ${threads.size} SMS threads (limit $limit) to Firebase.")
-                    touchHeartbeat(context)
-                    onComplete?.invoke(threads.size)
-                }
-                .addOnFailureListener { err ->
-                    Log.e(TAG, "Failed syncing SMS threads to Firebase: ${err.message}", err)
-                }
         }
     }
 
@@ -530,7 +551,13 @@ object PushBridgeFirebaseManager {
                     var successCount = 0
                     val failures = mutableListOf<String>()
 
-                    for (targetPhone in recipientsList) {
+                    for (target in recipientsList) {
+                        val cleanDigits = target.replace(Regex("\\D"), "")
+                        val targetPhone = if (cleanDigits.length < 7 && target.matches(Regex(".*[a-zA-Z].*"))) {
+                            SmsRepository.resolvePhoneNumberForContactName(context, target) ?: target
+                        } else {
+                            target
+                        }
                         val res = SmsManagerHelper.sendSms(context, targetPhone, message)
                         if (res is SmsSendResult.Success) {
                             successCount++

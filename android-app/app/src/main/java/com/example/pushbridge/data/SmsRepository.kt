@@ -65,9 +65,10 @@ object SmsRepository {
                 projection,
                 null,
                 null,
-                "${Telephony.Sms.DATE} DESC"
+                "${Telephony.Sms.DATE} DESC LIMIT 500"
             )
 
+            var scannedSms = 0
             cursor?.use { c ->
                 val idCol = c.getColumnIndexOrThrow(Telephony.Sms._ID)
                 val threadIdCol = c.getColumnIndexOrThrow(Telephony.Sms.THREAD_ID)
@@ -78,6 +79,7 @@ object SmsRepository {
                 val readCol = c.getColumnIndexOrThrow(Telephony.Sms.READ)
 
                 while (c.moveToNext()) {
+                    if (++scannedSms > 500) break
                     val threadId = c.getLong(threadIdCol)
                     val list = threadSmsMap.getOrPut(threadId) { mutableListOf() }
 
@@ -455,6 +457,7 @@ object SmsRepository {
 
     /**
      * Queries MMS messages for rich group chat text bodies, image parts, and participant addresses.
+     * Capped to recent 150 MMS entries and memory-safe image decoding to prevent OOM/freezes.
      */
     private fun queryMmsMessages(
         context: Context,
@@ -471,9 +474,10 @@ object SmsRepository {
                 projection,
                 null,
                 null,
-                "date DESC"
+                "date DESC LIMIT 150"
             )
 
+            var scannedMms = 0
             cursor?.use { c ->
                 val idCol = c.getColumnIndex("_id")
                 val threadIdCol = c.getColumnIndex("thread_id")
@@ -483,6 +487,7 @@ object SmsRepository {
                 val mTypeCol = c.getColumnIndex("m_type")
 
                 while (c.moveToNext()) {
+                    if (++scannedMms > 150) break
                     if (idCol == -1) break
                     val mmsId = c.getLong(idCol)
                     val rawThreadId = if (threadIdCol != -1) c.getLong(threadIdCol) else 0L
@@ -522,7 +527,9 @@ object SmsRepository {
                         threadMmsParticipants.getOrPut(effectiveThreadId) { mutableSetOf() }.addAll(addrDetails.allParticipants)
                     }
 
-                    val mmsContent = getMmsContent(context, mmsId)
+                    // Only decode images for the 2 most recent messages in a thread to keep payloads small and fast
+                    val shouldIncludeImages = list.size < 2
+                    val mmsContent = getMmsContent(context, mmsId, includeImages = shouldIncludeImages)
                     val senderAddress = if (isIncoming) {
                         addrDetails.sender ?: addrDetails.recipients.firstOrNull() ?: "Unknown"
                     } else {
@@ -545,8 +552,8 @@ object SmsRepository {
                     )
                 }
             }
-        } catch (e: Exception) {
-            Log.d(TAG, "MMS query failed or not supported: ${e.message}")
+        } catch (t: Throwable) {
+            Log.d(TAG, "MMS query failed or not supported: ${t.message}")
         }
 
         return mmsMap
@@ -621,8 +628,9 @@ object SmsRepository {
 
     /**
      * Extracts text content and inline image thumbnails from MMS parts table.
+     * Safely bounds memory usage with inSampleSize, RGB_565, and max dimensions 240x240.
      */
-    private fun getMmsContent(context: Context, mmsId: Long): MmsContentResult {
+    private fun getMmsContent(context: Context, mmsId: Long, includeImages: Boolean = true): MmsContentResult {
         val uri = Uri.parse("content://mms/part")
         val selection = "mid = ?"
         val selectionArgs = arrayOf(mmsId.toString())
@@ -665,16 +673,38 @@ object SmsRepository {
                                         line = reader.readLine()
                                     }
                                 }
-                            } catch (_: Exception) {}
+                            } catch (_: Throwable) {}
                         }
-                    } else if (ct.startsWith("image/") && attachmentData == null && partId.isNotBlank()) {
-                        // Extract and downsample MMS image thumbnail
+                    } else if (includeImages && ct.startsWith("image/") && attachmentData == null && partId.isNotBlank()) {
+                        // Extract and safely downsample MMS image thumbnail to prevent OOM
                         val partUri = Uri.parse("content://mms/part/$partId")
                         try {
+                            // 1. Decode bounds first
+                            val boundsOpts = android.graphics.BitmapFactory.Options().apply {
+                                inJustDecodeBounds = true
+                            }
                             context.contentResolver.openInputStream(partUri)?.use { isStream ->
-                                val bitmap = android.graphics.BitmapFactory.decodeStream(isStream)
+                                android.graphics.BitmapFactory.decodeStream(isStream, null, boundsOpts)
+                            }
+
+                            val maxDim = 240
+                            var inSample = 1
+                            if (boundsOpts.outWidth > maxDim || boundsOpts.outHeight > maxDim) {
+                                val halfWidth = boundsOpts.outWidth / 2
+                                val halfHeight = boundsOpts.outHeight / 2
+                                while ((halfWidth / inSample) >= maxDim && (halfHeight / inSample) >= maxDim) {
+                                    inSample *= 2
+                                }
+                            }
+
+                            // 2. Decode downsampled image using memory-efficient RGB_565
+                            val decodeOpts = android.graphics.BitmapFactory.Options().apply {
+                                inSampleSize = inSample
+                                inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
+                            }
+                            context.contentResolver.openInputStream(partUri)?.use { isStream ->
+                                val bitmap = android.graphics.BitmapFactory.decodeStream(isStream, null, decodeOpts)
                                 if (bitmap != null) {
-                                    val maxDim = 480
                                     val scale = if (bitmap.width > maxDim || bitmap.height > maxDim) {
                                         val factor = Math.min(
                                             maxDim.toFloat() / bitmap.width,
@@ -682,29 +712,29 @@ object SmsRepository {
                                         )
                                         android.graphics.Bitmap.createScaledBitmap(
                                             bitmap,
-                                            (bitmap.width * factor).toInt(),
-                                            (bitmap.height * factor).toInt(),
+                                            Math.max(1, (bitmap.width * factor).toInt()),
+                                            Math.max(1, (bitmap.height * factor).toInt()),
                                             true
                                         )
                                     } else {
                                         bitmap
                                     }
                                     val baos = java.io.ByteArrayOutputStream()
-                                    scale.compress(android.graphics.Bitmap.CompressFormat.JPEG, 70, baos)
+                                    scale.compress(android.graphics.Bitmap.CompressFormat.JPEG, 50, baos)
                                     val bytes = baos.toByteArray()
                                     val b64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
                                     attachmentData = "data:image/jpeg;base64,$b64"
-                                    attachmentMime = ct
+                                    attachmentMime = "image/jpeg"
                                 }
                             }
-                        } catch (e: Exception) {
-                            Log.d(TAG, "Failed decoding MMS image thumbnail for part $partId: ${e.message}")
+                        } catch (t: Throwable) {
+                            Log.d(TAG, "Failed decoding MMS image thumbnail for part $partId: ${t.message}")
                         }
                     }
                 }
                 textBody = if (sb.isNotEmpty()) sb.toString() else if (attachmentData != null) "[Photo]" else "[MMS Message]"
             }
-        } catch (e: Exception) {
+        } catch (t: Throwable) {
             textBody = "[MMS Message]"
         }
 
@@ -742,25 +772,53 @@ object SmsRepository {
 
     /**
      * Resolves contact name to their canonical phone number from the device address book.
+     * Uses progressive matching: exact match, substring LIKE, and tokenized query
+     * (stripping family/generational prefixes like Dad, Mom, Jr, II).
      */
     fun resolvePhoneNumberForContactName(context: Context, contactName: String): String? {
         if (contactName.isBlank() || !PermissionUtils.hasContactsReadPermission(context)) {
             return null
         }
 
+        val trimmed = contactName.trim()
+
+        // 1. Direct query: exact match or contains match
+        val directResult = queryPhoneNumberWithSelection(
+            context,
+            "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} = ? OR ${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?",
+            arrayOf(trimmed, "%$trimmed%")
+        )
+        if (directResult != null) return directResult
+
+        // 2. Tokenized query: Strip common labels (Dad, Mom, Father, Mother, Jr, Sr, II, III) and try core name tokens
+        val cleanedTokens = trimmed
+            .replace(Regex("(?i)\\b(dad|mom|father|mother|brother|sister|uncle|aunt|jr|sr|ii|iii|iv)\\b"), "")
+            .trim()
+            .split(Regex("\\s+"))
+            .filter { it.length >= 3 }
+
+        for (token in cleanedTokens) {
+            val tokenResult = queryPhoneNumberWithSelection(
+                context,
+                "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?",
+                arrayOf("%$token%")
+            )
+            if (tokenResult != null) return tokenResult
+        }
+
+        return null
+    }
+
+    private fun queryPhoneNumberWithSelection(context: Context, selection: String, args: Array<String>): String? {
         return try {
             val projection = arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER)
-            val selection = "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} = ? OR ${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?"
-            val selectionArgs = arrayOf(contactName.trim(), "%${contactName.trim()}%")
-
             val cursor = context.contentResolver.query(
                 ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
                 projection,
                 selection,
-                selectionArgs,
+                args,
                 null
             )
-
             cursor?.use {
                 if (it.moveToFirst()) {
                     val rawNum = it.getString(it.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER)) ?: ""
@@ -768,8 +826,7 @@ object SmsRepository {
                     if (normalized.isNotBlank()) normalized else null
                 } else null
             }
-        } catch (e: Exception) {
-            Log.d(TAG, "Could not resolve phone number for contact '$contactName': ${e.message}")
+        } catch (_: Exception) {
             null
         }
     }
