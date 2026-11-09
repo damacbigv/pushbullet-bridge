@@ -26,6 +26,23 @@ let currentThreadLimit = 30; // 30 | 50 | 100
 let currentSearchQuery = '';
 let mediaLightboxInitialized = false;
 
+// UI update debounce timers to eliminate render loops and DOM thrashing
+let notificationDebounceTimer = null;
+function debouncedLoadNotifications(delayMs = 300) {
+  if (notificationDebounceTimer) clearTimeout(notificationDebounceTimer);
+  notificationDebounceTimer = setTimeout(() => {
+    loadNotifications();
+  }, delayMs);
+}
+
+let smsDebounceTimer = null;
+function debouncedLoadSmsThreads(delayMs = 300) {
+  if (smsDebounceTimer) clearTimeout(smsDebounceTimer);
+  smsDebounceTimer = setTimeout(() => {
+    loadSmsThreads();
+  }, delayMs);
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   await initTheme();
   setupTabs();
@@ -45,10 +62,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   await loadSmsThreads();
   await loadClipboardState();
 
-  // Periodic heartbeat / presence verification poll every 15 seconds
+  // Periodic heartbeat / presence verification poll every 60 seconds (rate-limited)
   setInterval(async () => {
     await checkDevicePresence();
-  }, 15000);
+  }, 60000);
 });
 
 // =============================================================
@@ -1712,14 +1729,36 @@ function setupGlobalEvents() {
     showToast('Checking device presence status...');
   });
 
-  // Listen for real-time background broadcasts
+  // Listen for real-time background broadcasts with debouncing & tab awareness
   chrome.runtime.onMessage.addListener(async (message) => {
+    const isNotificationTab = !document.getElementById('tab-notifications')?.classList.contains('hidden');
+    const isThreadsTab = !document.getElementById('tab-threads')?.classList.contains('hidden');
+
     if (message.type === 'NOTIFICATION_RECEIVED') {
-      loadNotifications();
+      if (isNotificationTab) {
+        debouncedLoadNotifications(300);
+      } else {
+        // Fast badge counter update without rebuilding notifications DOM
+        const { notificationHistory = [] } = await chrome.storage.local.get('notificationHistory');
+        const counter = document.getElementById('feed-counter');
+        const countLabel = document.getElementById('notif-count-label');
+        if (counter) counter.textContent = notificationHistory.length;
+        if (countLabel) countLabel.textContent = `${notificationHistory.length} notification${notificationHistory.length === 1 ? '' : 's'}`;
+      }
     } else if (message.type === 'SMS_THREADS_UPDATED') {
-      loadSmsThreads();
+      if (isThreadsTab) {
+        debouncedLoadSmsThreads(300);
+      } else {
+        // Fast badge counter update without rebuilding threads DOM
+        const { smsThreads = {} } = await chrome.storage.local.get('smsThreads');
+        const counter = document.getElementById('threads-counter');
+        const validThreads = Object.values(smsThreads || {}).filter(t => t && t.threadId !== undefined);
+        if (counter) counter.textContent = validThreads.length;
+      }
     } else if (message.type === 'DEVICE_CONTACTS_UPDATED') {
-      loadSmsThreads();
+      if (isThreadsTab) {
+        debouncedLoadSmsThreads(500);
+      }
     } else if (message.type === 'DEVICE_PRESENCE_CHANGED') {
       if (!currentTargetDeviceId || message.deviceId === currentTargetDeviceId) {
         updatePresenceUI(message.presence);

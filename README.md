@@ -1,32 +1,37 @@
-# PushBridge v3.1.2
+# PushBridge v3.1.3
 
 > **Self-Hosted Cross-Platform Notification Mirroring, Scalable Threaded SMS, RCS & E2EE Group Chat Bridge & Multi-Device Companion**  
 > A private, modular alternative to Pushbullet connecting Google Chrome, Android phones, Wi-Fi tablets (e.g. Samsung Galaxy Tab S7), and cloud sync relays using Firebase as the real-time synchronization backend.
 
-[![Download Android APK](https://img.shields.io/badge/Download_APK-v3.1.2_(13_MB)-10B981?style=for-the-badge&logo=android&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/download/v3.1.2/PushBridge-v3.1.2.apk)
-[![GitHub Release](https://img.shields.io/badge/GitHub_Release-v3.1.2-6366F1?style=for-the-badge&logo=github&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v3.1.2)
-[![Chrome Extension](https://img.shields.io/badge/Chrome_Extension-Manifest_V3_(v3.1.2)-0EA5E9?style=for-the-badge&logo=googlechrome&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/tree/main/extension)
+[![Download Android APK](https://img.shields.io/badge/Download_APK-v3.1.3_(13_MB)-10B981?style=for-the-badge&logo=android&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/download/v3.1.3/PushBridge-v3.1.3.apk)
+[![GitHub Release](https://img.shields.io/badge/GitHub_Release-v3.1.3-6366F1?style=for-the-badge&logo=github&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v3.1.3)
+[![Chrome Extension](https://img.shields.io/badge/Chrome_Extension-Manifest_V3_(v3.1.3)-0EA5E9?style=for-the-badge&logo=googlechrome&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/tree/main/extension)
 
-📥 **Official GitHub Release Page**: [GitHub Release v3.1.2](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v3.1.2)  
-📦 **Direct APK Download**: [PushBridge-v3.1.2.apk](https://github.com/damacbigv/pushbullet-bridge/releases/download/v3.1.2/PushBridge-v3.1.2.apk)  
-📝 **Detailed Release Notes**: [`releases/release_notes_v3.1.2.md`](file:///Users/volliver/.gemini/antigravity/scratch/pushbullet-bridge/releases/release_notes_v3.1.2.md)
+📥 **Official GitHub Release Page**: [GitHub Release v3.1.3](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v3.1.3)  
+📦 **Direct APK Download**: [PushBridge-v3.1.3.apk](https://github.com/damacbigv/pushbullet-bridge/releases/download/v3.1.3/PushBridge-v3.1.3.apk)  
+📝 **Detailed Release Notes**: [`releases/release_notes_v3.1.3.md`](file:///Users/volliver/.gemini/antigravity/scratch/pushbullet-bridge/releases/release_notes_v3.1.3.md)
 
 ---
 
-## What's New in Version 3.1.2
+## What's New in Version 3.1.3
 
-### 1. Hardened Android Conversation Sync Engine
-- **Zero UI Freezes**: Resolved OutOfMemoryError and hanging in *"Syncing Conversations..."* by capping MMS queries to the 150 most recent entries and bounding memory usage with `inSampleSize` downsampling (max $240 \times 240$ px, `RGB_565`).
-- **Guaranteed Completion**: Wrapped coroutines in strict `try / catch (t: Throwable)` to guarantee UI button reset with automatic 10-second safeguards.
+### 1. Eliminated Extension Infinite Refresh / Render Loops
+- **Debounced DOM Updates**: UI renders are strictly throttled with 300ms debounce timers (`debouncedLoadNotifications` and `debouncedLoadSmsThreads`), eliminating render loops that froze the Chrome extension popup.
+- **Tab-Aware Rendering**: Switching tabs updates only counter badges for inactive views, avoiding unnecessary full DOM teardowns.
+- **Batch Backlog Processing**: Startup SSE stream dumps are processed in a single batch transaction instead of itemized loops.
 
-### 2. Multi-Member & Family Group Chat Auto-Injection
-- **Instant Thread Discovery**: Intercepts Google Messages group notifications (e.g., `"Dad Valla Olliver II, Mom Bertha Olliver: Mom Bertha Olliver"`), splits titles from sender names, and tokenizes address book contact resolution.
-- **Client-Side Live Injection**: Automatically injects incoming messaging notifications directly into `smsThreads` in memory and storage so family group threads immediately appear in the left-hand navigation list.
+### 2. Firebase Free-Tier Storage & Bandwidth Hardening
+- **Zero Inbound Ping-Pong**: Removed automated `SYNC_SMS_THREADS` command dispatch triggered by incoming messaging notifications, terminating the infinite command loop between Chrome and Android.
+- **Automated Rolling Retention Caps**: Enforced strict rolling retention ceilings across collections (30 items for `outbound_notifications`, 15 items for `outbound_sms`).
+- **Immediate Command Cleanup**: Android companion app deletes executed commands immediately (`ref.removeValue()`), keeping `inbound_commands` completely clean.
+- **Negligible Footprint**: Total database size safely capped (<360 KB), fitting comfortably into Firebase Spark (free tier) quotas.
 
-### 3. Chrome Extension CORS & CSP Resolution
-- **HTTP/HTTPS Host Permissions**: Added `"http://*/*"` alongside `"https://*/*"` to resolve CORS errors on shortened links (`http://bit.ly/...`).
-- **Resilient Fallback Previews**: Caches domain cards if page fetches are blocked or timed out, eliminating repeated console error spam.
-- **Strict MV3 Compliance**: 100% programmatic event listeners without inline handlers.
+### 3. RCS & Family Group Thread Preservation
+- **Non-Destructive Thread Merging**: Replaced `setValue()` with `updateChildren()` and an in-memory RCS cache in `PushBridgeFirebaseManager` so system SMS syncs never wipe out active Google Messages RCS or E2EE group conversations (such as *"Dad Valla Olliver II, Mom Bertha Olliver"*).
+- **Consolidated Telephony Observers**: Reduced Android content observers to a single listener on `Telephony.MmsSms.CONTENT_CONVERSATIONS_URI` with a 4-second debounce.
+
+### 4. CORS & Redirect Prevention
+- Hardened link preview fetching with URL shortener detection and `redirect: 'manual'` to eliminate browser CORS errors on tracking links (`bit.ly`, `trackaipac.co`).
 
 ---
 

@@ -90,7 +90,8 @@ class PushBridgeNotificationListenerService : NotificationListenerService() {
             override fun onChange(selfChange: Boolean, uri: Uri?) {
                 super.onChange(selfChange, uri)
                 val now = System.currentTimeMillis()
-                if (now - lastTrigger > 800L) {
+                // Strict 4-second debounce to prevent multiple triggers per SMS/MMS burst
+                if (now - lastTrigger > 4000L) {
                     lastTrigger = now
                     Log.d(TAG, "Telephony SMS/MMS change detected via ContentObserver ($uri). Auto-syncing threads...")
 
@@ -99,34 +100,23 @@ class PushBridgeNotificationListenerService : NotificationListenerService() {
                     val targetThreadId = seg?.toLongOrNull()
                     if (targetThreadId != null && targetThreadId > 0) {
                         PushBridgeFirebaseManager.syncSingleThread(applicationContext, targetThreadId)
-                    }
-
-                    PushBridgeFirebaseManager.syncAllSmsThreads(applicationContext)
-
-                    // Secondary delayed sync for asynchronous MMS attachment downloading
-                    handler.postDelayed({
+                    } else {
                         PushBridgeFirebaseManager.syncAllSmsThreads(applicationContext)
-                    }, 2200L)
+                    }
                 }
             }
         }
 
-        val urisToObserve = listOf(
-            Uri.parse("content://mms-sms/"),
-            android.provider.Telephony.Mms.CONTENT_URI,
-            android.provider.Telephony.Sms.CONTENT_URI,
-            android.provider.Telephony.MmsSms.CONTENT_CONVERSATIONS_URI,
-            android.provider.Telephony.Threads.CONTENT_URI
-        )
-
-        for (u in urisToObserve) {
-            try {
-                contentResolver.registerContentObserver(u, true, telephonyObserver as ContentObserver)
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed registering Telephony observer for $u: ${e.message}")
-            }
+        try {
+            contentResolver.registerContentObserver(
+                android.provider.Telephony.MmsSms.CONTENT_CONVERSATIONS_URI,
+                true,
+                telephonyObserver as ContentObserver
+            )
+            Log.i(TAG, "Registered consolidated Telephony MmsSms ContentObserver for real-time SMS/MMS sync.")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed registering Telephony observer: ${e.message}")
         }
-        Log.i(TAG, "Registered Telephony SMS/MMS ContentObservers for real-time group & SMS synchronization.")
     }
 
     override fun onListenerDisconnected() {
@@ -190,11 +180,9 @@ class PushBridgeNotificationListenerService : NotificationListenerService() {
         if (rcsResult != null) {
             // 1. Push immediate RCS message to Firebase outbound_sms
             PushBridgeFirebaseManager.pushIncomingSms(applicationContext, rcsResult.smsPayload)
-            // 2. Directly write full thread to Firebase sms_threads so it immediately appears in Chrome/Tablet!
+            // 2. Directly write targeted thread to Firebase sms_threads so it immediately appears in Chrome/Tablet
             PushBridgeFirebaseManager.syncThreadDirectly(applicationContext, rcsResult.thread)
-            // 3. Refresh entire threads map with full limit to keep all conversations up-to-date
-            PushBridgeFirebaseManager.syncAllSmsThreads(applicationContext, limit = maxOf(PushBridgeFirebaseManager.currentPaginationLimit, 100))
-            // 4. Fallback express relay service
+            // 3. Fallback express relay service
             PushBridgeSyncManager.syncIncomingSms(applicationContext, rcsResult.smsPayload)
         }
 

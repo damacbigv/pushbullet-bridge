@@ -157,9 +157,7 @@ async function processStreamData(eventType, rawData) {
             await handleIncomingDeviceContacts(devData.contacts, devId);
           }
           if (devData.outbound_notifications) {
-            for (const notif of Object.values(devData.outbound_notifications)) {
-              await handleIncomingNotification(notif, devId, false); // don't alert old backlog
-            }
+            await handleInitialNotificationsBatch(devData.outbound_notifications, devId);
           }
           if (devData.sms_threads) {
             await handleIncomingSmsThreads(devData.sms_threads, `/${devId}/sms_threads`, devId);
@@ -231,6 +229,102 @@ async function processStreamData(eventType, rawData) {
 }
 
 /**
+ * Processes incoming backlog notifications in a single batched transaction.
+ * Prevents UI freeze, eliminates rapid storage thrashing, and caps history cleanly.
+ */
+async function handleInitialNotificationsBatch(notificationsObj, devId) {
+  if (!notificationsObj || typeof notificationsObj !== 'object') return;
+
+  const rawList = Object.values(notificationsObj).filter(n => n && n.id);
+  if (rawList.length === 0) return;
+
+  // Sort newest first
+  rawList.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
+  // Only take the 30 most recent items to prevent storage explosion
+  const recentItems = rawList.slice(0, 30);
+
+  const {
+    seenNotificationIds = [],
+    notificationHistory = [],
+    smsThreads = {}
+  } = await chrome.storage.local.get([
+    'seenNotificationIds',
+    'notificationHistory',
+    'smsThreads'
+  ]);
+
+  const seenSet = new Set(seenNotificationIds);
+  const updatedHistory = [...notificationHistory];
+  let inMemoryThreads = { ...smsThreads };
+  let historyChanged = false;
+  let threadsChanged = false;
+
+  for (const notif of recentItems) {
+    if (!seenSet.has(notif.id)) {
+      seenSet.add(notif.id);
+      const item = {
+        id: notif.id,
+        notificationKey: notif.notificationKey || '',
+        packageName: notif.packageName || '',
+        appName: notif.appName || 'Android App',
+        title: notif.title || 'Notification',
+        text: notif.text || '',
+        subText: notif.subText || '',
+        canReply: !!notif.canReply,
+        replyActionTitle: notif.replyActionTitle || 'Reply',
+        isMessagingApp: !!notif.isMessagingApp,
+        sourceDeviceId: devId || notif.sourceDeviceId || 'android',
+        timestamp: notif.timestamp || Date.now()
+      };
+
+      if (!updatedHistory.some(n => n.id === item.id)) {
+        updatedHistory.unshift(item);
+        historyChanged = true;
+      }
+
+      // If messaging app, inject into threads in memory
+      if (item.isMessagingApp ||
+          item.packageName === 'com.google.android.apps.messaging' ||
+          item.packageName === 'com.samsung.android.messaging' ||
+          item.packageName === 'com.verizon.messaging.vzmsgs' ||
+          item.packageName === 'com.android.mms') {
+        const res = injectNotificationIntoSmsThreadsInMemory(item, devId, inMemoryThreads);
+        if (res) {
+          inMemoryThreads = res;
+          threadsChanged = true;
+        }
+      }
+    }
+  }
+
+  // Cap history to 50 items and seen IDs to 200
+  const finalHistory = updatedHistory.slice(0, 50);
+  const finalSeen = Array.from(seenSet).slice(0, 200);
+
+  await chrome.storage.local.set({
+    seenNotificationIds: finalSeen,
+    notificationHistory: finalHistory,
+    smsThreads: inMemoryThreads,
+    activeTargetDeviceId: devId
+  });
+
+  if (historyChanged) {
+    chrome.runtime.sendMessage({
+      type: 'NOTIFICATION_RECEIVED',
+      batch: true
+    }).catch(() => {});
+  }
+
+  if (threadsChanged) {
+    chrome.runtime.sendMessage({
+      type: 'SMS_THREADS_UPDATED',
+      threads: inMemoryThreads
+    }).catch(() => {});
+  }
+}
+
+/**
  * Handles an intercepted notification node from the phone.
  */
 async function handleIncomingNotification(notif, sourceDeviceId, shouldTriggerAlert = true) {
@@ -285,130 +379,123 @@ async function handleIncomingNotification(notif, sourceDeviceId, shouldTriggerAl
   // Trigger Native Desktop Toast via Chrome Notifications API
   if (shouldTriggerAlert) {
     await showDesktopToast(item);
-
-    // If incoming notification is from a messaging app, trigger a background SMS thread fetch
-    if (item.isMessagingApp || item.packageName === 'com.google.android.apps.messaging') {
-      const devId = sourceDeviceId || 'android_companion';
-      fetch(`${RTDB_BASE_URL}/devices/${devId}/inbound_commands.json`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'SYNC_SMS_THREADS',
-          limit: 100,
-          timestamp: Date.now(),
-          status: 'pending'
-        })
-      }).catch(() => {});
-    }
   }
 }
 
 /**
- * Directly injects a messaging notification into local/storage smsThreads.
+ * Pure in-memory helper to inject a messaging notification into an smsThreads dictionary.
  * Guarantees that Google Messages / RCS / E2EE / MMS group chats (e.g. family threads)
  * immediately appear in the "Threaded SMS & Group Chat" tab.
+ */
+function injectNotificationIntoSmsThreadsInMemory(notif, sourceDeviceId, currentThreads = {}) {
+  if (!notif || !notif.text) return currentThreads;
+
+  const rawTitle = (notif.title || '').replace(/🔒/g, '').trim();
+  let groupTitle = null;
+  let senderName = rawTitle;
+  let isGroup = false;
+
+  // Google Messages group chat title format: "<Group or Members>: <Sender Name>"
+  // e.g. "Dad Valla Olliver II, Mom Bertha Olliver: Mom Bertha Olliver"
+  if (rawTitle.includes(':')) {
+    groupTitle = rawTitle.substring(0, rawTitle.lastIndexOf(':')).trim();
+    senderName = rawTitle.substring(rawTitle.lastIndexOf(':') + 1).trim();
+    isGroup = true;
+  } else if (rawTitle.includes(',') || rawTitle.includes('&')) {
+    groupTitle = rawTitle;
+    isGroup = true;
+  }
+
+  // Match existing thread in currentThreads
+  let matchedKey = null;
+  for (const [key, t] of Object.entries(currentThreads)) {
+    if (!t) continue;
+    if (groupTitle && t.groupTitle && (
+      t.groupTitle.toLowerCase().trim() === groupTitle.toLowerCase().trim() ||
+      t.groupTitle.toLowerCase().includes(groupTitle.toLowerCase().trim()) ||
+      groupTitle.toLowerCase().includes(t.groupTitle.toLowerCase().trim())
+    )) {
+      matchedKey = key;
+      break;
+    }
+    if (groupTitle && t.contactName && t.contactName.toLowerCase().trim() === groupTitle.toLowerCase().trim()) {
+      matchedKey = key;
+      break;
+    }
+    if (!isGroup && senderName && (
+      (t.contactName && t.contactName.toLowerCase().trim() === senderName.toLowerCase().trim()) ||
+      (t.address && t.address.includes(senderName))
+    )) {
+      matchedKey = key;
+      break;
+    }
+  }
+
+  // Generate stable thread ID if new
+  const threadKey = matchedKey || String(
+    8000000000 + Math.abs((groupTitle || senderName || notif.id).split('').reduce((a, b) => (((a << 5) - a) + b.charCodeAt(0)) | 0, 0))
+  );
+
+  const existingThread = currentThreads[threadKey] || {
+    threadId: Number(threadKey) || Date.now(),
+    address: groupTitle || senderName,
+    contactName: groupTitle || senderName,
+    snippet: notif.text,
+    lastTimestamp: notif.timestamp || Date.now(),
+    unreadCount: 0,
+    isGroup: isGroup,
+    groupTitle: groupTitle,
+    recipients: groupTitle ? groupTitle.split(/[,&]+/).map(n => ({
+      name: n.trim(),
+      phone: n.trim(),
+      cleanDigits: n.trim().replace(/\D/g, '')
+    })) : [{ name: senderName, phone: senderName, cleanDigits: senderName.replace(/\D/g, '') }],
+    messages: {},
+    isRcs: true,
+    protocol: 'RCS'
+  };
+
+  const msgId = `notif_msg_${notif.timestamp || Date.now()}_${Math.abs(senderName.split('').reduce((a, b) => (((a << 5) - a) + b.charCodeAt(0)) | 0, 0))}`;
+  const newMsg = {
+    id: msgId,
+    threadId: existingThread.threadId,
+    address: senderName,
+    contactName: senderName,
+    body: notif.text,
+    timestamp: notif.timestamp || Date.now(),
+    isIncoming: true,
+    isRead: false,
+    isRcs: true,
+    protocol: 'RCS'
+  };
+
+  const updatedMessages = {
+    ...(existingThread.messages || {}),
+    [msgId]: newMsg
+  };
+
+  const updatedThread = {
+    ...existingThread,
+    snippet: notif.text,
+    lastTimestamp: notif.timestamp || Date.now(),
+    unreadCount: (existingThread.unreadCount || 0) + 1,
+    messages: updatedMessages
+  };
+
+  return {
+    ...currentThreads,
+    [threadKey]: updatedThread
+  };
+}
+
+/**
+ * Directly injects a messaging notification into local/storage smsThreads and broadcasts to UI.
  */
 async function injectNotificationIntoSmsThreads(notif, sourceDeviceId) {
   if (!notif || !notif.text) return;
   try {
     const { smsThreads = {} } = await chrome.storage.local.get('smsThreads');
-
-    const rawTitle = (notif.title || '').replace(/🔒/g, '').trim();
-    let groupTitle = null;
-    let senderName = rawTitle;
-    let isGroup = false;
-
-    // Google Messages group chat title format: "<Group or Members>: <Sender Name>"
-    // e.g. "Dad Valla Olliver II, Mom Bertha Olliver: Mom Bertha Olliver"
-    if (rawTitle.includes(':')) {
-      groupTitle = rawTitle.substring(0, rawTitle.lastIndexOf(':')).trim();
-      senderName = rawTitle.substring(rawTitle.lastIndexOf(':') + 1).trim();
-      isGroup = true;
-    } else if (rawTitle.includes(',') || rawTitle.includes('&')) {
-      groupTitle = rawTitle;
-      isGroup = true;
-    }
-
-    // Match existing thread in smsThreads
-    let matchedKey = null;
-    for (const [key, t] of Object.entries(smsThreads)) {
-      if (!t) continue;
-      if (groupTitle && t.groupTitle && (
-        t.groupTitle.toLowerCase().trim() === groupTitle.toLowerCase().trim() ||
-        t.groupTitle.toLowerCase().includes(groupTitle.toLowerCase().trim()) ||
-        groupTitle.toLowerCase().includes(t.groupTitle.toLowerCase().trim())
-      )) {
-        matchedKey = key;
-        break;
-      }
-      if (groupTitle && t.contactName && t.contactName.toLowerCase().trim() === groupTitle.toLowerCase().trim()) {
-        matchedKey = key;
-        break;
-      }
-      if (!isGroup && senderName && (
-        (t.contactName && t.contactName.toLowerCase().trim() === senderName.toLowerCase().trim()) ||
-        (t.address && t.address.includes(senderName))
-      )) {
-        matchedKey = key;
-        break;
-      }
-    }
-
-    // Generate stable thread ID if new
-    const threadKey = matchedKey || String(
-      8000000000 + Math.abs((groupTitle || senderName || notif.id).split('').reduce((a, b) => (((a << 5) - a) + b.charCodeAt(0)) | 0, 0))
-    );
-
-    const existingThread = smsThreads[threadKey] || {
-      threadId: Number(threadKey) || Date.now(),
-      address: groupTitle || senderName,
-      contactName: groupTitle || senderName,
-      snippet: notif.text,
-      lastTimestamp: notif.timestamp || Date.now(),
-      unreadCount: 0,
-      isGroup: isGroup,
-      groupTitle: groupTitle,
-      recipients: groupTitle ? groupTitle.split(/[,&]+/).map(n => ({
-        name: n.trim(),
-        phone: n.trim(),
-        cleanDigits: n.trim().replace(/\D/g, '')
-      })) : [{ name: senderName, phone: senderName, cleanDigits: senderName.replace(/\D/g, '') }],
-      messages: {},
-      isRcs: true,
-      protocol: 'RCS'
-    };
-
-    const msgId = `notif_msg_${notif.timestamp || Date.now()}_${Math.abs(senderName.split('').reduce((a, b) => (((a << 5) - a) + b.charCodeAt(0)) | 0, 0))}`;
-    const newMsg = {
-      id: msgId,
-      threadId: existingThread.threadId,
-      address: senderName,
-      contactName: senderName,
-      body: notif.text,
-      timestamp: notif.timestamp || Date.now(),
-      isIncoming: true,
-      isRead: false,
-      isRcs: true,
-      protocol: 'RCS'
-    };
-
-    const updatedMessages = {
-      ...(existingThread.messages || {}),
-      [msgId]: newMsg
-    };
-
-    const updatedThread = {
-      ...existingThread,
-      snippet: notif.text,
-      lastTimestamp: notif.timestamp || Date.now(),
-      unreadCount: (existingThread.unreadCount || 0) + 1,
-      messages: updatedMessages
-    };
-
-    const updatedThreads = {
-      ...smsThreads,
-      [threadKey]: updatedThread
-    };
+    const updatedThreads = injectNotificationIntoSmsThreadsInMemory(notif, sourceDeviceId, smsThreads);
 
     await chrome.storage.local.set({ smsThreads: updatedThreads });
     chrome.runtime.sendMessage({
@@ -712,14 +799,6 @@ async function handleDevicePresenceUpdate(presence, devId, subField) {
     deviceId: devId,
     presence: mergedPresence
   }).catch(() => {});
-
-  // AUTOMATIC BACKGROUND SYNC:
-  // When device transitions to online or is confirmed online, pull active SMS threads
-  // and local contacts automatically without user having to manually poll
-  if (isOnline && !wasOnline) {
-    console.log(`[PushBridge SW] Phone ${devId} came ONLINE. Triggering automatic background sync...`);
-    await autoSyncDeviceData(devId);
-  }
 }
 
 /**
@@ -1058,17 +1137,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }
 
           // 2. Direct client-side fetch fallback (enabled via host_permissions: "https://*/*")
-          if (!preview) {
+          // Exclude known URL shorteners/trackers and set redirect: 'manual' to prevent browser CORS violations
+          const isUrlShortener = /^(https?:\/\/)?([a-z0-9-]+\.)?(bit\.ly|tinyurl\.com|t\.co|goo\.gl|ow\.ly|is\.gd|buff\.ly|adf\.ly|bitly\.com|cur\.lv|tiny\.cc|rebrand\.ly|trackaipac\.co)\b/i.test(url);
+
+          if (!preview && !isUrlShortener) {
             try {
               const controller = new AbortController();
               const timeoutId = setTimeout(() => controller.abort(), 3000);
               const pageRes = await fetch(url, {
                 headers: { 'Accept': 'text/html,application/xhtml+xml' },
-                signal: controller.signal
+                signal: controller.signal,
+                redirect: 'manual'
               });
               clearTimeout(timeoutId);
 
-              if (pageRes.ok) {
+              if (pageRes.ok && pageRes.type !== 'opaqueredirect') {
                 const html = await pageRes.text();
                 const urlObj = new URL(url);
                 const domain = urlObj.hostname.replace(/^www\./, '');
@@ -1101,7 +1184,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 };
               }
             } catch (err) {
-              console.warn('[PushBridge SW] Client link preview fetch fallback error:', err.message);
+              // Silently handle any network or abort errors without console noise
             }
           }
 

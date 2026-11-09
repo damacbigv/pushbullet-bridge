@@ -196,6 +196,8 @@ object PushBridgeFirebaseManager {
         }
     }
 
+    private val rcsThreadsCache = java.util.concurrent.ConcurrentHashMap<String, SmsConversationThread>()
+
     /**
      * Registers current device metadata and permission states in Firebase.
      */
@@ -228,6 +230,7 @@ object PushBridgeFirebaseManager {
 
     /**
      * Pushes an intercepted notification JSON payload up to Firebase Realtime Database.
+     * Enforces strict rolling retention (max 30 items) to prevent quota exhaustion.
      */
     fun pushNotification(context: Context, payload: NotificationPayload) {
         scope.launch {
@@ -248,6 +251,7 @@ object PushBridgeFirebaseManager {
                 .addOnSuccessListener {
                     Log.i(TAG, "Successfully synced notification '${payload.title}' from ${payload.appName} to Firebase")
                     touchHeartbeat(context)
+                    pruneOutboundNotifications(deviceId, maxKeep = 30)
                 }
                 .addOnFailureListener { err ->
                     Log.e(TAG, "Failed pushing notification to Firebase: ${err.message}", err)
@@ -255,8 +259,26 @@ object PushBridgeFirebaseManager {
         }
     }
 
+    private fun pruneOutboundNotifications(deviceId: String, maxKeep: Int = 30) {
+        val notifsRef = database?.getReference("devices")?.child(deviceId)?.child("outbound_notifications") ?: return
+        notifsRef.addListenerForSingleValueEvent(object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                if (snapshot.childrenCount > maxKeep) {
+                    val children = snapshot.children.toList()
+                    val toRemoveCount = children.size - maxKeep
+                    for (i in 0 until toRemoveCount) {
+                        children[i].ref.removeValue()
+                    }
+                    Log.d(TAG, "Pruned $toRemoveCount old notifications from Firebase (retained $maxKeep).")
+                }
+            }
+            override fun onCancelled(error: DatabaseError) {}
+        })
+    }
+
     /**
      * Pushes an intercepted incoming SMS up to Firebase.
+     * Enforces rolling retention (max 15 items).
      */
     fun pushIncomingSms(context: Context, sms: SmsPayload) {
         scope.launch {
@@ -272,6 +294,7 @@ object PushBridgeFirebaseManager {
                 .addOnSuccessListener {
                     Log.i(TAG, "Successfully synced SMS from ${sms.sender} to Firebase")
                     touchHeartbeat(context)
+                    pruneOutboundSms(deviceId, maxKeep = 15)
                 }
                 .addOnFailureListener { err ->
                     Log.e(TAG, "Failed syncing SMS to Firebase: ${err.message}", err)
@@ -279,10 +302,27 @@ object PushBridgeFirebaseManager {
         }
     }
 
+    private fun pruneOutboundSms(deviceId: String, maxKeep: Int = 15) {
+        val smsRef = database?.getReference("devices")?.child(deviceId)?.child("outbound_sms") ?: return
+        smsRef.addListenerForSingleValueEvent(object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                if (snapshot.childrenCount > maxKeep) {
+                    val children = snapshot.children.toList()
+                    val toRemoveCount = children.size - maxKeep
+                    for (i in 0 until toRemoveCount) {
+                        children[i].ref.removeValue()
+                    }
+                    Log.d(TAG, "Pruned $toRemoveCount old outbound SMS items from Firebase (retained $maxKeep).")
+                }
+            }
+            override fun onCancelled(error: DatabaseError) {}
+        })
+    }
+
     /**
      * Reads SMS & MMS conversations with scalable pagination (30, 50, 100 threads)
      * and syncs message histories to Firebase Realtime Database.
-     * Guaranteed completion callback and fallback to individual writes on bulk failure.
+     * Preserves active RCS threads and merges without wiping them out.
      */
     fun syncAllSmsThreads(
         context: Context,
@@ -308,19 +348,30 @@ object PushBridgeFirebaseManager {
                     threadsMap[thread.threadId.toString()] = thread.toMap()
                 }
 
-                threadsRef.setValue(threadsMap)
+                // Preserve all active RCS threads (e.g. family group chats) so they are never wiped out
+                for ((rcsKey, rcsThread) in rcsThreadsCache) {
+                    threadsMap[rcsKey] = rcsThread.toMap()
+                }
+
+                threadsRef.updateChildren(threadsMap)
                     .addOnSuccessListener {
-                        Log.i(TAG, "Successfully synced ${threads.size} SMS threads (limit $limit) to Firebase.")
+                        Log.i(TAG, "Successfully synced ${threads.size} SMS threads (limit $limit) + ${rcsThreadsCache.size} RCS threads to Firebase.")
                         touchHeartbeat(context)
-                        scope.launch(Dispatchers.Main) { onComplete?.invoke(threads.size) }
+                        scope.launch(Dispatchers.Main) { onComplete?.invoke(threads.size + rcsThreadsCache.size) }
                     }
                     .addOnFailureListener { err ->
-                        Log.e(TAG, "Failed bulk syncing SMS threads to Firebase: ${err.message}. Writing individually...", err)
+                        Log.e(TAG, "Failed bulk updating SMS threads to Firebase: ${err.message}. Writing individually...", err)
                         scope.launch(Dispatchers.IO) {
                             var individualCount = 0
                             for (thread in threads) {
                                 try {
                                     threadsRef.child(thread.threadId.toString()).setValue(thread.toMap())
+                                    individualCount++
+                                } catch (_: Exception) {}
+                            }
+                            for ((rcsKey, rcsThread) in rcsThreadsCache) {
+                                try {
+                                    threadsRef.child(rcsKey).setValue(rcsThread.toMap())
                                     individualCount++
                                 } catch (_: Exception) {}
                             }
@@ -341,6 +392,7 @@ object PushBridgeFirebaseManager {
      */
     fun syncThreadDirectly(context: Context, thread: SmsConversationThread, onComplete: (() -> Unit)? = null) {
         if (thread.threadId <= 0) return
+        rcsThreadsCache[thread.threadId.toString()] = thread
         scope.launch {
             if (!isInitialized) initialize(context)
             val deviceId = getDeviceId(context)
@@ -861,7 +913,10 @@ object PushBridgeFirebaseManager {
             "result" to resultMessage,
             "processedAt" to ServerValue.TIMESTAMP
         )
-        ref.updateChildren(updates)
+        ref.updateChildren(updates).addOnCompleteListener {
+            // Automatically clean up executed command node to prevent inbound_commands backlog
+            ref.removeValue()
+        }
     }
 
     fun getDeviceId(context: Context): String {
