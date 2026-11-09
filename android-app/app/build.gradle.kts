@@ -30,8 +30,8 @@ android {
         applicationId = "com.example.pushbridge"
         minSdk = 24
         targetSdk = 36
-        versionCode = 313
-        versionName = "3.1.3"
+        versionCode = 314
+        versionName = "3.1.4"
 
         buildConfigField("String", "FIREBASE_PROJECT_ID", "\"${getEnvConfig("FIREBASE_PROJECT_ID", "pushclonebridge")}\"")
         buildConfigField("String", "FIREBASE_RTDB_URL", "\"${getEnvConfig("FIREBASE_DATABASE_URL", "https://pushclonebridge-default-rtdb.firebaseio.com")}\"")

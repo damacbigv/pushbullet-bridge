@@ -391,6 +391,7 @@ function injectNotificationIntoSmsThreadsInMemory(notif, sourceDeviceId, current
   if (!notif || !notif.text) return currentThreads;
 
   const rawTitle = (notif.title || '').replace(/🔒/g, '').trim();
+  const rawSubText = (notif.subText || '').replace(/🔒/g, '').trim();
   let groupTitle = null;
   let senderName = rawTitle;
   let isGroup = false;
@@ -403,6 +404,9 @@ function injectNotificationIntoSmsThreadsInMemory(notif, sourceDeviceId, current
     isGroup = true;
   } else if (rawTitle.includes(',') || rawTitle.includes('&')) {
     groupTitle = rawTitle;
+    isGroup = true;
+  } else if (rawSubText && (rawSubText.includes(',') || rawSubText.includes('&'))) {
+    groupTitle = rawSubText;
     isGroup = true;
   }
 
@@ -502,6 +506,24 @@ async function injectNotificationIntoSmsThreads(notif, sourceDeviceId) {
       type: 'SMS_THREADS_UPDATED',
       threads: updatedThreads
     }).catch(() => {});
+
+    // Also persist this thread to Firebase RTDB so it synchronizes across all devices & survives refreshes
+    const rawTitle = (notif.title || '').replace(/🔒/g, '').trim();
+    let threadKey = null;
+    for (const [key, t] of Object.entries(updatedThreads)) {
+      if (t && (t.groupTitle === rawTitle || (rawTitle.includes(':') && t.groupTitle === rawTitle.substring(0, rawTitle.lastIndexOf(':')).trim()))) {
+        threadKey = key;
+        break;
+      }
+    }
+    if (threadKey && updatedThreads[threadKey]) {
+      const devId = sourceDeviceId || 'android_companion';
+      fetch(`${RTDB_BASE_URL}/devices/${devId}/sms_threads/${threadKey}.json`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedThreads[threadKey])
+      }).catch(() => {});
+    }
   } catch (err) {
     console.warn('[PushBridge SW] Error injecting notification into smsThreads:', err.message);
   }
@@ -1009,19 +1031,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const targetUrl = `${RTDB_BASE_URL}/devices/${targetDeviceId}/sms_threads.json`;
           const res = await fetch(targetUrl);
           const data = await res.json();
-          const threads = data && typeof data === 'object' ? data : {};
-          await chrome.storage.local.set({ smsThreads: threads });
+          const fetchedThreads = data && typeof data === 'object' ? data : {};
+          const { smsThreads: existingLocal = {} } = await chrome.storage.local.get('smsThreads');
+          // Merge incoming threads with local threads to preserve actively tracked RCS/group discussions
+          const mergedThreads = { ...existingLocal, ...fetchedThreads };
+          await chrome.storage.local.set({ smsThreads: mergedThreads });
 
-          let slicedThreads = threads;
+          let slicedThreads = mergedThreads;
           if (limit && Number(limit) > 0) {
-            const sorted = Object.values(threads).sort((a, b) => (b.lastTimestamp || 0) - (a.lastTimestamp || 0));
+            const sorted = Object.values(mergedThreads).sort((a, b) => (b.lastTimestamp || 0) - (a.lastTimestamp || 0));
             const capped = sorted.slice(0, Number(limit));
             slicedThreads = {};
             capped.forEach(t => {
               slicedThreads[String(t.threadId)] = t;
             });
           }
-          sendResponse({ success: true, threads: slicedThreads, allThreads: threads });
+          sendResponse({ success: true, threads: slicedThreads, allThreads: mergedThreads });
           break;
         }
 

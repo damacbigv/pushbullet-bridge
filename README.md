@@ -1,24 +1,24 @@
-# PushBridge v3.1.3
+# PushBridge v3.1.4
 
 > **Self-Hosted Cross-Platform Notification Mirroring, Scalable Threaded SMS, RCS & E2EE Group Chat Bridge & Multi-Device Companion**  
 > A private, modular alternative to Pushbullet connecting Google Chrome, Android phones, Wi-Fi tablets (e.g. Samsung Galaxy Tab S7), and cloud sync relays using Firebase as the real-time synchronization backend.
 
-[![Download Android APK](https://img.shields.io/badge/Download_APK-v3.1.3_(13_MB)-10B981?style=for-the-badge&logo=android&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/download/v3.1.3/PushBridge-v3.1.3.apk)
-[![GitHub Release](https://img.shields.io/badge/GitHub_Release-v3.1.3-6366F1?style=for-the-badge&logo=github&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v3.1.3)
-[![Chrome Extension](https://img.shields.io/badge/Chrome_Extension-Manifest_V3_(v3.1.3)-0EA5E9?style=for-the-badge&logo=googlechrome&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/tree/main/extension)
+[![Download Android APK](https://img.shields.io/badge/Download_APK-v3.1.4_(13_MB)-10B981?style=for-the-badge&logo=android&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/download/v3.1.4/PushBridge-v3.1.4.apk)
+[![GitHub Release](https://img.shields.io/badge/GitHub_Release-v3.1.4-6366F1?style=for-the-badge&logo=github&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v3.1.4)
+[![Chrome Extension](https://img.shields.io/badge/Chrome_Extension-Manifest_V3_(v3.1.4)-0EA5E9?style=for-the-badge&logo=googlechrome&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/tree/main/extension)
 
-📥 **Official GitHub Release Page**: [GitHub Release v3.1.3](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v3.1.3)  
-📦 **Direct APK Download**: [PushBridge-v3.1.3.apk](https://github.com/damacbigv/pushbullet-bridge/releases/download/v3.1.3/PushBridge-v3.1.3.apk)  
-📝 **Detailed Release Notes**: [`releases/release_notes_v3.1.3.md`](file:///Users/volliver/.gemini/antigravity/scratch/pushbullet-bridge/releases/release_notes_v3.1.3.md)
+📥 **Official GitHub Release Page**: [GitHub Release v3.1.4](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v3.1.4)  
+📦 **Direct APK Download**: [PushBridge-v3.1.4.apk](https://github.com/damacbigv/pushbullet-bridge/releases/download/v3.1.4/PushBridge-v3.1.4.apk)  
+📝 **Detailed Release Notes**: [`releases/release_notes_v3.1.4.md`](file:///Users/volliver/.gemini/antigravity/scratch/pushbullet-bridge/releases/release_notes_v3.1.4.md)
 
 ---
 
-## What's New in Version 3.1.3
+## What's New in Version 3.1.4
 
-### 1. Eliminated Extension Infinite Refresh / Render Loops
-- **Debounced DOM Updates**: UI renders are strictly throttled with 300ms debounce timers (`debouncedLoadNotifications` and `debouncedLoadSmsThreads`), eliminating render loops that froze the Chrome extension popup.
-- **Tab-Aware Rendering**: Switching tabs updates only counter badges for inactive views, avoiding unnecessary full DOM teardowns.
-- **Batch Backlog Processing**: Startup SSE stream dumps are processed in a single batch transaction instead of itemized loops.
+### 1. Fixed RCS & Google Messages Group Conversation Discovery
+- **Unlocked Notification Interception**: Removed the restrictive `MessagingStyle` check in `RcsConversationManager.kt`. Google Messages notifications (e.g. `"Dad Valla Olliver II, Mom Bertha Olliver: Mom Bertha Olliver"`) are now instantly recognized as active conversation threads and mapped to thread IDs $\ge 8{,}000{,}000{,}000$.
+- **Direct Real-Time Thread Sync**: Intercepted RCS group messages are immediately written to Firebase (`devices/$deviceId/sms_threads/$threadId`), making family group chats appear in the Chrome extension and tablet dashboard seamlessly.
+- **Merge-Safe Extension Fetching**: Clicking "Fetch from Phone" in Chrome preserves locally and remotely discovered RCS threads instead of overwriting them.
 
 ### 2. Firebase Free-Tier Storage & Bandwidth Hardening
 - **Zero Inbound Ping-Pong**: Removed automated `SYNC_SMS_THREADS` command dispatch triggered by incoming messaging notifications, terminating the infinite command loop between Chrome and Android.

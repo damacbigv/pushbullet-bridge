@@ -83,22 +83,27 @@ object RcsConversationManager {
         val notification = sbn.notification ?: return null
         val extras = notification.extras ?: return null
 
-        // Extract MessagingStyle if present
+        // Extract MessagingStyle if present (optional on modern Google Messages)
         val messagingStyle = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(notification)
         val rawMessages = extras.getParcelableArray(Notification.EXTRA_MESSAGES)
-        if (messagingStyle == null && rawMessages == null) {
-            return null
-        }
 
         // 1. Detect End-to-End Encryption & RCS Protocol indicators
         val rawTitle = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
-        val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
+        val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()
+            ?: extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()
+            ?: ""
         val subText = extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString() ?: ""
         val rawConvTitle = messagingStyle?.conversationTitle?.toString()
             ?: extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)?.toString()
 
+        // If no MessagingStyle, no raw messages, and no message text, skip non-message events
+        if (messagingStyle == null && rawMessages == null && text.isBlank()) {
+            return null
+        }
+
         val cleanTitle = rawTitle.replace("🔒", "").trim()
         val cleanConvTitle = rawConvTitle?.replace("🔒", "")?.trim()
+        val cleanSubText = subText.replace("🔒", "").trim()
 
         // Google Messages group notifications format: "<Group Name or Participants>: <Sender Name>"
         // e.g. "Dad Valla Olliver II, Mom Bertha Olliver: Mom Bertha Olliver"
@@ -114,6 +119,10 @@ object RcsConversationManager {
                 }
                 parsedSenderFromTitle = candidateSender
             }
+        }
+
+        if (parsedGroupTitle.isNullOrBlank() && cleanSubText.isNotBlank() && (cleanSubText.contains(",") || cleanSubText.contains("&"))) {
+            parsedGroupTitle = cleanSubText
         }
 
         val hasLockIndicator = rawTitle.contains("🔒") || text.contains("🔒") || subText.contains("🔒") ||
