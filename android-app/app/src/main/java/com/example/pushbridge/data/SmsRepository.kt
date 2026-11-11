@@ -890,19 +890,85 @@ object SmsRepository {
     }
 
     /**
-     * Standardizes phone numbers to clean digits / E.164 format and filters placeholder tokens.
+     * Resolves a Person.uri string (`tel:` or `content://com.android.contacts/...`) safely into a phone number.
+     */
+    fun resolvePhoneNumberFromUri(context: Context, uriString: String?): String? {
+        if (uriString.isNullOrBlank()) return null
+        val trimmed = uriString.trim()
+        if (trimmed.startsWith("tel:", ignoreCase = true)) {
+            return normalizePhoneNumber(trimmed.removePrefix("tel:").removePrefix("TEL:")).takeIf { it.isNotBlank() }
+        }
+        if (trimmed.startsWith("content://com.android.contacts", ignoreCase = true) && PermissionUtils.hasContactsReadPermission(context)) {
+            return try {
+                val uri = Uri.parse(trimmed)
+                val lookupUri = ContactsContract.Contacts.lookupContact(context.contentResolver, uri) ?: uri
+                var contactId: String? = null
+                context.contentResolver.query(
+                    lookupUri,
+                    arrayOf(ContactsContract.Contacts._ID),
+                    null,
+                    null,
+                    null
+                )?.use { c ->
+                    if (c.moveToFirst()) {
+                        val idIdx = c.getColumnIndex(ContactsContract.Contacts._ID)
+                        if (idIdx != -1) contactId = c.getString(idIdx)
+                    }
+                }
+                val resolvedContactId = contactId
+                if (!resolvedContactId.isNullOrBlank()) {
+                    queryPhoneNumberWithSelection(
+                        context,
+                        "${ContactsContract.CommonDataKinds.Phone.CONTACT_ID} = ?",
+                        arrayOf(resolvedContactId)
+                    )
+                } else null
+            } catch (e: Exception) {
+                Log.d(TAG, "Could not resolve phone from contact URI: ${e.message}")
+                null
+            }
+        }
+        return null
+    }
+
+    /**
+     * Returns true when a raw address looks like a valid phone number / short code
+     * rather than a serialized lookup URI or corrupted digit dump.
+     */
+    fun isValidPhoneAddress(raw: String?): Boolean {
+        if (raw.isNullOrBlank()) return false
+        val trimmed = raw.trim()
+        if (trimmed.contains("://") || trimmed.contains("contacts/lookup", ignoreCase = true)) return false
+        val digits = trimmed.replace(Regex("\\D"), "")
+        return digits.length in 3..15
+    }
+
+    /**
+     * Standardizes phone numbers to clean digits / E.164 format and filters placeholder tokens
+     * as well as non-phone content URIs (e.g. `content://com.android.contacts/contacts/lookup/...`).
      */
     fun normalizePhoneNumber(raw: String?): String {
         if (raw.isNullOrBlank()) return ""
         val trimmed = raw.trim()
         if (trimmed.equals("insert-address-token", ignoreCase = true)) return ""
         if (trimmed.startsWith("mailto:", ignoreCase = true)) return ""
+        if (trimmed.startsWith("tel:", ignoreCase = true)) {
+            return normalizePhoneNumber(trimmed.substring(4))
+        }
+        // Never strip digits out of a content:// or lookup URI
+        if (trimmed.contains("://") || trimmed.contains("contacts/lookup", ignoreCase = true)) {
+            return ""
+        }
 
         val digits = trimmed.replace(Regex("\\D"), "")
-        if (digits.length >= 10) {
-            return if (trimmed.startsWith("+")) trimmed else if (digits.length == 10) "+1$digits" else "+$digits"
+        // Reject corrupted concatenations or lookup IDs exceeding E.164 maximum (15 digits)
+        if (digits.length > 15) return ""
+        if (digits.length == 10) return "+1$digits"
+        if (digits.length in 11..15) return "+$digits"
+        if (digits.length in 3..9 && trimmed.all { it.isDigit() || it in setOf('+', '-', ' ', '(', ')') }) {
+            return digits
         }
-        return trimmed
+        return if (trimmed.length <= 24) trimmed else ""
     }
 
     private data class ConversationMetadata(

@@ -5,24 +5,25 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.content.res.Configuration
 import android.os.Build
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -31,14 +32,28 @@ import androidx.core.app.RemoteInput
 import com.example.pushbridge.MainActivity
 import com.example.pushbridge.data.PushBridgeFirebaseManager
 import com.example.pushbridge.model.DeviceRole
-import com.example.pushbridge.service.PushBridgeNotificationListenerService
+import com.example.pushbridge.model.PeerDeviceInfo
+import com.example.pushbridge.theme.AmberWarn
+import com.example.pushbridge.theme.EmeraldGreen
+import com.example.pushbridge.theme.PushBridgePalettes
 import com.example.pushbridge.theme.PushBridgeTheme
-import com.example.pushbridge.util.DateTimeUtils
+import com.example.pushbridge.theme.PushBridgeThemeTokens
+import com.example.pushbridge.theme.RoseAlert
+import com.example.pushbridge.ui.components.PushBridgeIcons
+import com.example.pushbridge.ui.dashboard.ClipboardTab
+import com.example.pushbridge.ui.dashboard.MessagesTab
+import com.example.pushbridge.ui.dashboard.NotificationsTab
+import com.example.pushbridge.ui.dashboard.SetupTab
 import com.example.pushbridge.util.PermissionUtils
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+enum class DashboardTab(val label: String) {
+    MESSAGES("Messages"),
+    NOTIFICATIONS("Notifications"),
+    CLIPBOARD("Clipboard"),
+    SETTINGS("Settings")
+}
+
 @Composable
 fun MainScreen(
     onRequestSmsPermission: () -> Unit = {},
@@ -48,587 +63,297 @@ fun MainScreen(
     val context = LocalContext.current
     val configuration = LocalConfiguration.current
     val isTabletLayout = configuration.screenWidthDp >= 600
+    val c = PushBridgeThemeTokens.colors
+    val coroutineScope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
 
     val deviceId = remember { PushBridgeFirebaseManager.getDeviceId(context) }
     val deviceRole = remember { PushBridgeFirebaseManager.getDeviceRole(context) }
-    var selectedPaginationLimit by remember { mutableStateOf(PushBridgeFirebaseManager.currentPaginationLimit) }
-    var testStatusText by remember { mutableStateOf<String?>(null) }
 
-    // Permissions
     val hasNotifAccess = remember(permissionTrigger) { PermissionUtils.hasNotificationAccess(context) }
     val hasSmsSend = remember(permissionTrigger) { PermissionUtils.hasSmsSendPermission(context) }
     val hasSmsRead = remember(permissionTrigger) { PermissionUtils.hasSmsReadPermission(context) }
     val hasContactsRead = remember(permissionTrigger) { PermissionUtils.hasContactsReadPermission(context) }
-    val isListenerConnected = PushBridgeNotificationListenerService.isConnected
-    var isSyncingThreads by remember { mutableStateOf(false) }
-    val coroutineScope = rememberCoroutineScope()
 
-    val handleSyncThreads: (Int) -> Unit = { limit ->
-        isSyncingThreads = true
-        val timeoutJob = coroutineScope.launch {
-            delay(10000)
-            if (isSyncingThreads) {
-                isSyncingThreads = false
-                testStatusText = "Sync finished."
+    val selectedThemeId by PushBridgeFirebaseManager.selectedTheme.collectAsState()
+    val paginationLimit by PushBridgeFirebaseManager.paginationLimitFlow.collectAsState()
+    val mirrorLocalNotifications by PushBridgeFirebaseManager.mirrorLocalNotificationsFlow.collectAsState()
+    val peerDevices by PushBridgeFirebaseManager.peerDevices.collectAsState()
+    val activeTargetDeviceId by PushBridgeFirebaseManager.activeTargetDeviceId.collectAsState()
+    val syncedThreads by PushBridgeFirebaseManager.syncedThreads.collectAsState()
+    val syncedNotifications by PushBridgeFirebaseManager.syncedNotifications.collectAsState()
+    val syncedContacts by PushBridgeFirebaseManager.syncedContacts.collectAsState()
+    val syncedClipboard by PushBridgeFirebaseManager.syncedClipboard.collectAsState()
+    val isSyncing by PushBridgeFirebaseManager.isSyncingFromPeer.collectAsState()
+
+    // Tablets always land directly in the Messages workspace; Phones land in Messages once granted
+    var activeTab by rememberSaveable {
+        mutableStateOf(
+            if (deviceRole == DeviceRole.WIFI_TABLET || isTabletLayout || (hasSmsRead && hasNotifAccess)) {
+                DashboardTab.MESSAGES
+            } else {
+                DashboardTab.SETTINGS
+            }
+        )
+    }
+
+    var setupStatusMessage by remember { mutableStateOf<String?>(null) }
+
+    val activePeer = remember(peerDevices, activeTargetDeviceId) {
+        peerDevices.firstOrNull { it.deviceId == activeTargetDeviceId }
+    }
+    val targetOnline = activePeer?.online ?: true
+    val targetLabel = activePeer?.deviceName ?: activeTargetDeviceId ?: "Paired Phone"
+
+    val totalUnreadMessages = remember(syncedThreads) {
+        syncedThreads.sumOf { it.unreadCount }
+    }
+    val activeNotificationsCount = syncedNotifications.size
+
+    val triggerSync: (Int) -> Unit = { limit ->
+        PushBridgeFirebaseManager.requestPeerSmsSync(context, limit) { _, message ->
+            val note = message ?: "Sync initiated."
+            setupStatusMessage = note
+            coroutineScope.launch {
+                snackbarHostState.showSnackbar(note)
             }
         }
-        PushBridgeFirebaseManager.syncAllSmsThreads(context, limit) { count ->
-            timeoutJob.cancel()
-            isSyncingThreads = false
-            testStatusText = "Synchronized $count conversation threads (limit: $limit)!"
+    }
+
+    val triggerContactsSync: () -> Unit = {
+        PushBridgeFirebaseManager.requestPeerContactsSync(context) { _, message ->
+            val note = message ?: "Contacts sync requested."
+            setupStatusMessage = note
+            coroutineScope.launch {
+                snackbarHostState.showSnackbar(note)
+            }
+        }
+    }
+
+    val triggerTestNotification: () -> Unit = {
+        postTestNotificationWithReply(context)
+        val msg = "Posted test notification with RemoteInput. Check status bar!"
+        setupStatusMessage = msg
+        coroutineScope.launch {
+            snackbarHostState.showSnackbar(msg)
         }
     }
 
     Scaffold(
+        modifier = modifier.fillMaxSize(),
+        containerColor = c.background,
+        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
         topBar = {
-            TopAppBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(10.dp)
-                                .background(
-                                    if (hasNotifAccess || deviceRole == DeviceRole.WIFI_TABLET) Color(0xFF10B981) else Color(0xFFEF4444),
-                                    shape = RoundedCornerShape(50)
-                                )
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = if (deviceRole == DeviceRole.WIFI_TABLET) "PushBridge Tablet Companion" else "PushBridge Phone Companion",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 18.sp
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = if (deviceRole == DeviceRole.WIFI_TABLET) Color(0xFF8B5CF6).copy(alpha = 0.2f) else Color(0xFF0EA5E9).copy(alpha = 0.2f),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, if (deviceRole == DeviceRole.WIFI_TABLET) Color(0xFF8B5CF6) else Color(0xFF0EA5E9))
-                        ) {
-                            Text(
-                                text = if (deviceRole == DeviceRole.WIFI_TABLET) "Wi-Fi Tablet (Tab S7)" else "Primary Phone (SIM)",
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (deviceRole == DeviceRole.WIFI_TABLET) Color(0xFFC4B5FD) else Color(0xFF38BDF8)
-                            )
-                        }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                )
-            )
-        }
-    ) { innerPadding ->
-        if (isTabletLayout) {
-            // Adaptive Two-Column Layout for Tablets (e.g. Galaxy Tab S7)
-            Row(
-                modifier = modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-                    .padding(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    EngineStatusCard(deviceId, deviceRole, isListenerConnected)
-                    PaginationSelectorCard(
-                        currentLimit = selectedPaginationLimit,
-                        onLimitChanged = { newLimit ->
-                            selectedPaginationLimit = newLimit
-                            handleSyncThreads(newLimit)
-                        }
-                    )
-                    NotificationAccessCard(context, hasNotifAccess)
-                }
-
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    SmsBridgeCard(
-                        context = context,
-                        hasSmsRead = hasSmsRead,
-                        hasSmsSend = hasSmsSend,
-                        hasContactsRead = hasContactsRead,
-                        isSyncingThreads = isSyncingThreads,
-                        isTablet = deviceRole == DeviceRole.WIFI_TABLET,
-                        onRequestPermissions = onRequestSmsPermission,
-                        onSyncThreads = {
-                            handleSyncThreads(selectedPaginationLimit)
-                        },
-                        onSyncContacts = {
-                            PushBridgeFirebaseManager.syncDeviceContacts(context) { count ->
-                                testStatusText = "Synced $count device contacts to Firebase!"
-                            }
-                        }
-                    )
-                    ConversationThreadsPreviewCard(context)
-                    RcsProtocolCard()
-                    ThemeShowcaseCard()
-                    DiagnosticsCard(context, testStatusText) { newStatus ->
-                        testStatusText = newStatus
-                    }
-                }
-            }
-        } else {
-            // Standard Single Column Layout for Phones
-            Column(
-                modifier = modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-                    .padding(16.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
-            ) {
-                EngineStatusCard(deviceId, deviceRole, isListenerConnected)
-                PaginationSelectorCard(
-                    currentLimit = selectedPaginationLimit,
-                    onLimitChanged = { newLimit ->
-                        selectedPaginationLimit = newLimit
-                        handleSyncThreads(newLimit)
-                    }
-                )
-                NotificationAccessCard(context, hasNotifAccess)
-                SmsBridgeCard(
-                    context = context,
-                    hasSmsRead = hasSmsRead,
-                    hasSmsSend = hasSmsSend,
-                    hasContactsRead = hasContactsRead,
-                    isSyncingThreads = isSyncingThreads,
-                    isTablet = deviceRole == DeviceRole.WIFI_TABLET,
-                    onRequestPermissions = onRequestSmsPermission,
-                    onSyncThreads = {
-                        handleSyncThreads(selectedPaginationLimit)
+            Column(modifier = Modifier.fillMaxWidth()) {
+                DashboardTopBar(
+                    isTabletLayout = isTabletLayout,
+                    deviceRole = deviceRole,
+                    peerDevices = peerDevices,
+                    activePeer = activePeer,
+                    activeTargetDeviceId = activeTargetDeviceId,
+                    targetOnline = targetOnline,
+                    selectedThemeId = selectedThemeId,
+                    isSyncing = isSyncing,
+                    onSelectTargetDevice = { targetId ->
+                        PushBridgeFirebaseManager.selectTargetDevice(context, targetId)
                     },
-                    onSyncContacts = {
-                        PushBridgeFirebaseManager.syncDeviceContacts(context) { count ->
-                            testStatusText = "Synced $count device contacts to Firebase!"
-                        }
-                    }
+                    onThemeSelected = { themeId ->
+                        PushBridgeFirebaseManager.setTheme(context, themeId)
+                    },
+                    onSyncClicked = { triggerSync(paginationLimit) }
                 )
-                ConversationThreadsPreviewCard(context)
-                RcsProtocolCard()
-                ThemeShowcaseCard()
-                DiagnosticsCard(context, testStatusText) { newStatus ->
-                    testStatusText = newStatus
-                }
-            }
-        }
-    }
-}
 
-@Composable
-private fun EngineStatusCard(deviceId: String, deviceRole: DeviceRole, isListenerConnected: Boolean) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("REAL-TIME FIREBASE ENGINE", style = MaterialTheme.typography.labelSmall, color = Color(0xFF0EA5E9))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Project ID:", style = MaterialTheme.typography.bodyMedium)
-                Text(PushBridgeFirebaseManager.FIREBASE_PROJECT_ID, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold)
-            }
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Device ID:", style = MaterialTheme.typography.bodyMedium)
-                Text(deviceId, fontFamily = FontFamily.Monospace)
-            }
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Role & Platform:", style = MaterialTheme.typography.bodyMedium)
-                Text(
-                    if (deviceRole == DeviceRole.WIFI_TABLET) "Tablet Companion" else "Primary Telephony Phone",
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (deviceRole == DeviceRole.WIFI_TABLET) Color(0xFF8B5CF6) else Color(0xFF0EA5E9)
-                )
-            }
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Bridge Service:", style = MaterialTheme.typography.bodyMedium)
-                Text(
-                    if (isListenerConnected) "CONNECTED" else "STANDBY",
-                    color = if (isListenerConnected) Color(0xFF10B981) else Color(0xFFEAB308),
-                    fontWeight = FontWeight.Bold
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun PaginationSelectorCard(
-    currentLimit: Int,
-    onLimitChanged: (Int) -> Unit
-) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("SMS THREAD PAGINATION LIMIT", style = MaterialTheme.typography.labelSmall, color = Color(0xFF0EA5E9))
-                Text("$currentLimit Threads", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981))
-            }
-            Text(
-                "Scalable pagination dynamically controls active conversation queries across Android, Tablets, and the Chrome Extension.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                listOf(30, 50, 100).forEach { limit ->
-                    val isSelected = currentLimit == limit
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = if (isSelected) Color(0xFF0EA5E9) else MaterialTheme.colorScheme.surface,
-                        border = androidx.compose.foundation.BorderStroke(
-                            1.dp,
-                            if (isSelected) Color(0xFF0284C7) else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
-                        ),
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable { onLimitChanged(limit) }
-                    ) {
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier.padding(vertical = 10.dp)
-                        ) {
-                            Text(
-                                text = "$limit Threads",
-                                fontSize = 12.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                color = if (isSelected) Color.White else MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun NotificationAccessCard(context: Context, hasNotifAccess: Boolean) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("NOTIFICATION LISTENER", style = MaterialTheme.typography.labelSmall, color = Color(0xFF0EA5E9))
-                Badge(
-                    containerColor = if (hasNotifAccess) Color(0xFF10B981) else Color(0xFFEF4444)
-                ) {
-                    Text(if (hasNotifAccess) "GRANTED" else "REQUIRED", color = Color.White)
-                }
-            }
-            Text(
-                "Allows PushBridge to intercept messaging notifications, extract text, and capture RemoteInput reply actions.",
-                style = MaterialTheme.typography.bodySmall
-            )
-            Button(
-                onClick = {
-                    context.startActivity(PermissionUtils.getNotificationAccessSettingsIntent())
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(if (hasNotifAccess) "Manage Notification Settings" else "Grant Notification Access")
-            }
-        }
-    }
-}
-
-@Composable
-private fun SmsBridgeCard(
-    context: Context,
-    hasSmsRead: Boolean,
-    hasSmsSend: Boolean,
-    hasContactsRead: Boolean,
-    isSyncingThreads: Boolean,
-    isTablet: Boolean,
-    onRequestPermissions: () -> Unit,
-    onSyncThreads: () -> Unit,
-    onSyncContacts: () -> Unit
-) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("TELEPHONY & CONTACTS BRIDGE", style = MaterialTheme.typography.labelSmall, color = Color(0xFF0EA5E9))
-                Badge(
-                    containerColor = if (isTablet) Color(0xFF8B5CF6) else if (hasSmsSend && hasSmsRead) Color(0xFF10B981) else Color(0xFFEF4444)
-                ) {
-                    Text(if (isTablet) "TABLET MODE" else if (hasSmsSend && hasSmsRead) "ENABLED" else "ACTION NEEDED", color = Color.White)
-                }
-            }
-
-            if (isTablet) {
-                Text(
-                    "Running on Wi-Fi Tablet Companion. Inbound and outbound SMS/MMS are securely routed via peer-sync with your primary phone.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFFC4B5FD)
-                )
-            } else {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("READ_SMS (MMS & Group):", style = MaterialTheme.typography.bodySmall)
-                    Text(if (hasSmsRead) "✓ Granted" else "✗ Missing", color = if (hasSmsRead) Color(0xFF10B981) else Color(0xFFEF4444))
-                }
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("SEND_SMS (Broadcast):", style = MaterialTheme.typography.bodySmall)
-                    Text(if (hasSmsSend) "✓ Granted" else "✗ Missing", color = if (hasSmsSend) Color(0xFF10B981) else Color(0xFFEF4444))
-                }
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("READ_CONTACTS:", style = MaterialTheme.typography.bodySmall)
-                    Text(if (hasContactsRead) "✓ Granted" else "✗ Missing", color = if (hasContactsRead) Color(0xFF10B981) else Color(0xFFEF4444))
-                }
-                OutlinedButton(
-                    onClick = onRequestPermissions,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Request Telephony & Contacts Permissions")
-                }
-            }
-
-            Button(
-                onClick = onSyncThreads,
-                enabled = (hasSmsRead || isTablet) && !isSyncingThreads,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(if (isSyncingThreads) "Syncing Conversations..." else "Sync Full SMS & Group Threads")
-            }
-
-            Button(
-                onClick = onSyncContacts,
-                enabled = hasContactsRead || isTablet,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6366F1))
-            ) {
-                Text("Sync Device Contacts to Firebase")
-            }
-        }
-    }
-}
-
-@Composable
-private fun ConversationThreadsPreviewCard(context: Context) {
-    val sampleThreads = remember {
-        listOf(
-            Triple("Alice Cooper", "Are we still on for lunch today?", System.currentTimeMillis() - 1000 * 60 * 12),
-            Triple("Weekend Hike & BBQ (Group)", "Sarah: Sounds great, count me in!", System.currentTimeMillis() - 1000 * 60 * 5),
-            Triple("Bob Martinez", "The server deployment finished cleanly.", System.currentTimeMillis() - 1000 * 60 * 60 * 24 * 3)
-        )
-    }
-
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("SMS THREADS TIMESTAMP PREVIEW", style = MaterialTheme.typography.labelSmall, color = Color(0xFF0EA5E9))
-                Surface(
-                    shape = RoundedCornerShape(4.dp),
-                    color = Color(0xFF0EA5E9).copy(alpha = 0.2f),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF0EA5E9))
-                ) {
-                    Text(
-                        "v3.1.0",
-                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF38BDF8)
-                    )
-                }
-            }
-            Text(
-                "Context-aware timestamps: Current calendar date shows time only; older dates display day of week, month, and year.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-            )
-
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(8.dp))
-                    .padding(8.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                sampleThreads.forEachIndexed { index, (sender, snippet, timestamp) ->
-                    val timeStr = DateTimeUtils.formatThreadTimestamp(timestamp)
-
+                // Offline Peer Banner (when paired phone hasn't pinged heartbeat recently)
+                if (activePeer != null && !targetOnline) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 4.dp, horizontal = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                            .background(AmberWarn.copy(alpha = 0.14f))
+                            .padding(horizontal = 14.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(sender, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                            Text(snippet, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = Color(0xFF0EA5E9).copy(alpha = 0.12f),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF0EA5E9).copy(alpha = 0.3f))
-                        ) {
-                            Text(
-                                text = timeStr,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                fontSize = 10.sp,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.Medium,
-                                color = Color(0xFF38BDF8)
-                            )
-                        }
-                    }
-                    if (index < sampleThreads.size - 1) {
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun RcsProtocolCard() {
-    val rcsThreads = remember { com.example.pushbridge.data.RcsConversationManager.getAllRcsThreads() }
-    val e2eeCount = rcsThreads.count { it.isEncrypted }
-    val groupRcsCount = rcsThreads.count { it.isGroup }
-
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("RCS & E2EE ENCRYPTION SPEC", style = MaterialTheme.typography.labelSmall, color = Color(0xFF10B981))
-                Surface(
-                    shape = RoundedCornerShape(4.dp),
-                    color = Color(0xFF10B981).copy(alpha = 0.2f),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF10B981))
-                ) {
-                    Text(
-                        "ACTIVE (V3.1)",
-                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF6EE7B7)
-                    )
-                }
-            }
-            Text(
-                "Active MessagingStyle notification hooks intercept Google Messages RCS data packets, end-to-end encrypted chats, and family group conversations.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-            )
-
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Active RCS Threads:", style = MaterialTheme.typography.bodyMedium)
-                Text("${rcsThreads.size} threads (${e2eeCount} E2EE, ${groupRcsCount} groups)", fontWeight = FontWeight.SemiBold, color = Color(0xFF10B981))
-            }
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("RCS Reply Architecture:", style = MaterialTheme.typography.bodyMedium)
-                Text("Native RemoteInput RCS", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Medium)
-            }
-        }
-    }
-}
-
-@Composable
-private fun ThemeShowcaseCard() {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("UI THEME ENGINE (10 THEMES)", style = MaterialTheme.typography.labelSmall, color = Color(0xFF0EA5E9))
-                Text("WCAG AAA", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF10B981))
-            }
-            Text(
-                "High-contrast vibrant palettes including Cyberpunk Neon, Electric Indigo, Emerald Sunset, Crimson Velvet, and Modern Slate:",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-            )
-
-            val themes = listOf(
-                Triple("Cyberpunk", Color(0xFF050508), Color(0xFF00F0FF)),
-                Triple("Indigo", Color(0xFF08081A), Color(0xFF6366F1)),
-                Triple("Em-Sunset", Color(0xFF06130E), Color(0xFFF59E0B)),
-                Triple("Crimson", Color(0xFF150508), Color(0xFFE11D48)),
-                Triple("Slate", Color(0xFF0F141C), Color(0xFF38BDF8))
-            )
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                themes.forEach { (name, bg, accent) ->
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .background(bg, RoundedCornerShape(8.dp))
-                                .border(1.5.dp, accent, RoundedCornerShape(8.dp)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(14.dp)
-                                    .background(accent, RoundedCornerShape(4.dp))
-                            )
-                        }
                         Text(
-                            name,
-                            fontSize = 9.sp,
+                            text = "⚠ ${activePeer.deviceName} is offline. Outbound messages will queue until reconnected.",
+                            fontSize = 11.sp,
+                            color = AmberWarn,
                             fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            text = "Standby",
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = AmberWarn
+                        )
+                    }
+                }
+            }
+        },
+        bottomBar = {
+            if (!isTabletLayout) {
+                NavigationBar(
+                    containerColor = c.surface,
+                    contentColor = c.textMuted,
+                    tonalElevation = 0.dp
+                ) {
+                    DashboardTab.entries.forEach { tab ->
+                        val selected = activeTab == tab
+                        val badgeCount = when (tab) {
+                            DashboardTab.MESSAGES -> totalUnreadMessages
+                            DashboardTab.NOTIFICATIONS -> activeNotificationsCount
+                            else -> 0
+                        }
+                        NavigationBarItem(
+                            selected = selected,
+                            onClick = { activeTab = tab },
+                            icon = {
+                                TabIconWithBadge(
+                                    tab = tab,
+                                    badgeCount = badgeCount,
+                                    tint = if (selected) c.primary else c.textMuted
+                                )
+                            },
+                            label = {
+                                Text(
+                                    text = tab.label,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = c.primary,
+                                selectedTextColor = c.accent,
+                                unselectedIconColor = c.textMuted,
+                                unselectedTextColor = c.textMuted,
+                                indicatorColor = c.primary.copy(alpha = 0.16f)
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    ) { innerPadding ->
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+        ) {
+            if (isTabletLayout) {
+                NavigationRail(
+                    containerColor = c.surface,
+                    contentColor = c.textMuted,
+                    modifier = Modifier.fillMaxHeight()
+                ) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    DashboardTab.entries.forEach { tab ->
+                        val selected = activeTab == tab
+                        val badgeCount = when (tab) {
+                            DashboardTab.MESSAGES -> totalUnreadMessages
+                            DashboardTab.NOTIFICATIONS -> activeNotificationsCount
+                            else -> 0
+                        }
+                        NavigationRailItem(
+                            selected = selected,
+                            onClick = { activeTab = tab },
+                            icon = {
+                                TabIconWithBadge(
+                                    tab = tab,
+                                    badgeCount = badgeCount,
+                                    tint = if (selected) c.primary else c.textMuted
+                                )
+                            },
+                            label = {
+                                Text(
+                                    text = tab.label,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                                )
+                            },
+                            colors = NavigationRailItemDefaults.colors(
+                                selectedIconColor = c.primary,
+                                selectedTextColor = c.accent,
+                                unselectedIconColor = c.textMuted,
+                                unselectedTextColor = c.textMuted,
+                                indicatorColor = c.primary.copy(alpha = 0.16f)
+                            )
+                        )
+                    }
+                }
+                VerticalDivider(thickness = 1.dp, color = c.border)
+            }
+
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+            ) {
+                when (activeTab) {
+                    DashboardTab.MESSAGES -> {
+                        MessagesTab(
+                            threads = syncedThreads,
+                            contacts = syncedContacts,
+                            paginationLimit = paginationLimit,
+                            isSyncing = isSyncing,
+                            isTabletLayout = isTabletLayout,
+                            targetOnline = targetOnline,
+                            onPaginationChanged = { newLimit -> triggerSync(newLimit) },
+                            onSyncRequested = { triggerSync(paginationLimit) }
+                        )
+                    }
+
+                    DashboardTab.NOTIFICATIONS -> {
+                        NotificationsTab(
+                            notifications = syncedNotifications,
+                            targetDeviceLabel = targetLabel,
+                            onTriggerTestNotification = triggerTestNotification
+                        )
+                    }
+
+                    DashboardTab.CLIPBOARD -> {
+                        ClipboardTab(
+                            syncedClipboard = syncedClipboard,
+                            targetDeviceLabel = targetLabel
+                        )
+                    }
+
+                    DashboardTab.SETTINGS -> {
+                        SetupTab(
+                            deviceId = deviceId,
+                            deviceRole = deviceRole,
+                            peerDevices = peerDevices,
+                            activeTargetDeviceId = activeTargetDeviceId,
+                            selectedThemeId = selectedThemeId,
+                            paginationLimit = paginationLimit,
+                            mirrorLocalNotifications = mirrorLocalNotifications,
+                            hasNotifAccess = hasNotifAccess,
+                            hasSmsRead = hasSmsRead,
+                            hasSmsSend = hasSmsSend,
+                            hasContactsRead = hasContactsRead,
+                            isSyncingThreads = isSyncing,
+                            isTabletLayout = isTabletLayout,
+                            statusMessage = setupStatusMessage,
+                            onSelectTargetDevice = { targetId ->
+                                PushBridgeFirebaseManager.selectTargetDevice(context, targetId)
+                            },
+                            onRefreshDevices = {
+                                PushBridgeFirebaseManager.refreshDiscoveredDevices(context)
+                            },
+                            onThemeSelected = { themeId ->
+                                PushBridgeFirebaseManager.setTheme(context, themeId)
+                            },
+                            onPaginationChanged = { newLimit -> triggerSync(newLimit) },
+                            onMirrorLocalNotificationsChanged = { enabled ->
+                                PushBridgeFirebaseManager.setMirrorLocalNotifications(context, enabled)
+                            },
+                            onRequestPermissions = onRequestSmsPermission,
+                            onSyncThreads = { triggerSync(paginationLimit) },
+                            onSyncContacts = triggerContactsSync,
+                            onTriggerTestNotification = triggerTestNotification
                         )
                     }
                 }
@@ -638,34 +363,292 @@ private fun ThemeShowcaseCard() {
 }
 
 @Composable
-private fun DiagnosticsCard(
-    context: Context,
-    testStatusText: String?,
-    onStatusChanged: (String) -> Unit
+private fun DashboardTopBar(
+    isTabletLayout: Boolean,
+    deviceRole: DeviceRole,
+    peerDevices: List<PeerDeviceInfo>,
+    activePeer: PeerDeviceInfo?,
+    activeTargetDeviceId: String?,
+    targetOnline: Boolean,
+    selectedThemeId: String,
+    isSyncing: Boolean,
+    onSelectTargetDevice: (String) -> Unit,
+    onThemeSelected: (String) -> Unit,
+    onSyncClicked: () -> Unit
 ) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        shape = RoundedCornerShape(12.dp),
+    val c = PushBridgeThemeTokens.colors
+    var peerMenuExpanded by remember { mutableStateOf(false) }
+    var themeMenuExpanded by remember { mutableStateOf(false) }
+
+    Surface(
+        color = c.surface,
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("DIAGNOSTICS & TEST", style = MaterialTheme.typography.labelSmall, color = Color(0xFF0EA5E9))
-
-            Button(
-                onClick = {
-                    postTestNotificationWithReply(context)
-                    onStatusChanged("Posted test notification with RemoteInput. Check status bar!")
-                },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0EA5E9))
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text("Trigger Test Notification (With RemoteInput)")
-            }
+                // Branding & Role Tag
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(if (targetOnline) EmeraldGreen else AmberWarn)
+                    )
+                    Text(
+                        text = "PushBridge",
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = c.textMain
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = c.badgeBg
+                    ) {
+                        Text(
+                            text = "v3.2.0",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = c.badgeText,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                    if (isTabletLayout && deviceRole == DeviceRole.WIFI_TABLET) {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = Color(0xFF8B5CF6).copy(alpha = 0.16f),
+                            border = BorderStroke(1.dp, Color(0xFF8B5CF6).copy(alpha = 0.5f))
+                        ) {
+                            Text(
+                                text = "Tablet Dashboard",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (c.isLight) Color(0xFF6D28D9) else Color(0xFFC4B5FD),
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
 
-            testStatusText?.let {
-                Text(it, color = Color(0xFF10B981), style = MaterialTheme.typography.bodySmall)
+                // Right Actions: Peer Device Switcher + Theme Picker + Sync
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    // Target Peer Device Selector
+                    Box {
+                        Surface(
+                            shape = RoundedCornerShape(18.dp),
+                            color = c.surfaceSubtle,
+                            border = BorderStroke(1.dp, c.border),
+                            modifier = Modifier.clickable { peerMenuExpanded = true }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .clip(CircleShape)
+                                        .background(if (targetOnline) EmeraldGreen else RoseAlert)
+                                )
+                                Text(
+                                    text = activePeer?.deviceName
+                                        ?.removeSuffix(" (Tablet Companion)")
+                                        ?: activeTargetDeviceId
+                                        ?: "Detecting...",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = c.textMain,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.widthIn(max = if (isTabletLayout) 210.dp else 115.dp)
+                                )
+                                Icon(
+                                    imageVector = PushBridgeIcons.ExpandMore,
+                                    contentDescription = "Switch Phone",
+                                    tint = c.textMuted,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+
+                        DropdownMenu(
+                            expanded = peerMenuExpanded,
+                            onDismissRequest = { peerMenuExpanded = false },
+                            modifier = Modifier.background(c.surface)
+                        ) {
+                            if (peerDevices.isEmpty()) {
+                                DropdownMenuItem(
+                                    text = { Text("Discovering devices...", color = c.textMuted, fontSize = 12.sp) },
+                                    onClick = { peerMenuExpanded = false }
+                                )
+                            } else {
+                                peerDevices.forEach { peer ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                            ) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(8.dp)
+                                                        .clip(CircleShape)
+                                                        .background(if (peer.online) EmeraldGreen else RoseAlert)
+                                                )
+                                                Column {
+                                                    Text(peer.deviceName, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = c.textMain)
+                                                    Text(peer.deviceId, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = c.textMuted)
+                                                }
+                                            }
+                                        },
+                                        trailingIcon = {
+                                            if (peer.deviceId == activeTargetDeviceId) {
+                                                Icon(PushBridgeIcons.Check, null, tint = c.accent, modifier = Modifier.size(16.dp))
+                                            }
+                                        },
+                                        onClick = {
+                                            peerMenuExpanded = false
+                                            onSelectTargetDevice(peer.deviceId)
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Quick Theme Picker
+                    Box {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = c.surfaceSubtle,
+                            border = BorderStroke(1.dp, c.border),
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clickable { themeMenuExpanded = true }
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = PushBridgeIcons.Palette,
+                                    contentDescription = "Change Theme",
+                                    tint = c.accent,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+
+                        DropdownMenu(
+                            expanded = themeMenuExpanded,
+                            onDismissRequest = { themeMenuExpanded = false },
+                            modifier = Modifier.background(c.surface)
+                        ) {
+                            PushBridgePalettes.all.forEach { palette ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(14.dp)
+                                                    .clip(CircleShape)
+                                                    .background(palette.primary)
+                                            )
+                                            Text(
+                                                text = palette.label,
+                                                fontSize = 13.sp,
+                                                fontWeight = if (palette.id == selectedThemeId) FontWeight.Bold else FontWeight.Normal,
+                                                color = c.textMain
+                                            )
+                                        }
+                                    },
+                                    trailingIcon = {
+                                        if (palette.id == selectedThemeId) {
+                                            Icon(PushBridgeIcons.Check, null, tint = c.accent, modifier = Modifier.size(16.dp))
+                                        }
+                                    },
+                                    onClick = {
+                                        themeMenuExpanded = false
+                                        onThemeSelected(palette.id)
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    // Sync Button
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = c.surfaceSubtle,
+                        border = BorderStroke(1.dp, c.border),
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clickable(enabled = !isSyncing, onClick = onSyncClicked)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            if (isSyncing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = c.accent
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = PushBridgeIcons.Refresh,
+                                    contentDescription = "Sync Conversations",
+                                    tint = c.textMain,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+                }
             }
+            HorizontalDivider(thickness = 1.dp, color = c.border)
         }
+    }
+}
+
+@Composable
+private fun TabIconWithBadge(
+    tab: DashboardTab,
+    badgeCount: Int,
+    tint: Color
+) {
+    val icon = when (tab) {
+        DashboardTab.MESSAGES -> PushBridgeIcons.Chat
+        DashboardTab.NOTIFICATIONS -> PushBridgeIcons.Notifications
+        DashboardTab.CLIPBOARD -> PushBridgeIcons.Clipboard
+        DashboardTab.SETTINGS -> PushBridgeIcons.Settings
+    }
+
+    if (badgeCount > 0) {
+        BadgedBox(
+            badge = {
+                Badge(
+                    containerColor = PushBridgeThemeTokens.colors.primary,
+                    contentColor = PushBridgeThemeTokens.colors.onPrimary
+                ) {
+                    Text(text = if (badgeCount > 99) "99+" else badgeCount.toString(), fontSize = 9.sp)
+                }
+            }
+        ) {
+            Icon(imageVector = icon, contentDescription = tab.label, tint = tint, modifier = Modifier.size(22.dp))
+        }
+    } else {
+        Icon(imageVector = icon, contentDescription = tab.label, tint = tint, modifier = Modifier.size(22.dp))
     }
 }
 
@@ -682,9 +665,8 @@ private fun postTestNotificationWithReply(context: Context) {
         notificationManager.createNotificationChannel(channel)
     }
 
-    val replyLabel = "Type a reply..."
     val remoteInput = RemoteInput.Builder("key_text_reply")
-        .setLabel(replyLabel)
+        .setLabel("Type a reply...")
         .build()
 
     val intent = Intent(context, MainActivity::class.java)
@@ -716,7 +698,7 @@ private fun postTestNotificationWithReply(context: Context) {
     notificationManager.notify(9999, notification)
 }
 
-@Preview(showBackground = true)
+@Preview(showBackground = true, widthDp = 960, heightDp = 640)
 @Composable
 fun MainScreenPreview() {
     PushBridgeTheme {

@@ -73,6 +73,15 @@ object RcsConversationManager {
         }
     }
 
+    fun normalizeConversationTitle(raw: String?): String? {
+        if (raw.isNullOrBlank()) return null
+        return raw
+            .replace("🔒", "")
+            .replace(Regex("\\s*\\(\\d+\\s+messages?\\)\\s*$", RegexOption.IGNORE_CASE), "")
+            .trim()
+            .takeIf { it.isNotBlank() }
+    }
+
     /**
      * Intercepts and parses an active notification for RCS / E2EE MessagingStyle data.
      */
@@ -81,6 +90,8 @@ object RcsConversationManager {
         if (!RCS_PACKAGES.contains(pkg)) return null
 
         val notification = sbn.notification ?: return null
+        // Skip Android group summary notifications (e.g. "Group Name (35 messages)") that cause duplicate threads
+        if ((notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0) return null
         val extras = notification.extras ?: return null
 
         // Extract MessagingStyle if present (optional on modern Google Messages)
@@ -101,9 +112,9 @@ object RcsConversationManager {
             return null
         }
 
-        val cleanTitle = rawTitle.replace("🔒", "").trim()
-        val cleanConvTitle = rawConvTitle?.replace("🔒", "")?.trim()
-        val cleanSubText = subText.replace("🔒", "").trim()
+        val cleanTitle = normalizeConversationTitle(rawTitle) ?: ""
+        val cleanConvTitle = normalizeConversationTitle(rawConvTitle)
+        val cleanSubText = normalizeConversationTitle(subText) ?: ""
 
         // Google Messages group notifications format: "<Group Name or Participants>: <Sender Name>"
         // e.g. "Dad Valla Olliver II, Mom Bertha Olliver: Mom Bertha Olliver"
@@ -111,9 +122,9 @@ object RcsConversationManager {
         var parsedSenderFromTitle: String? = null
 
         if (cleanTitle.contains(":")) {
-            val candidateGroup = cleanTitle.substringBeforeLast(":").trim()
+            val candidateGroup = normalizeConversationTitle(cleanTitle.substringBeforeLast(":"))
             val candidateSender = cleanTitle.substringAfterLast(":").trim()
-            if (candidateGroup.isNotBlank()) {
+            if (!candidateGroup.isNullOrBlank()) {
                 if (parsedGroupTitle.isNullOrBlank()) {
                     parsedGroupTitle = candidateGroup
                 }
@@ -148,7 +159,7 @@ object RcsConversationManager {
                 extras.getBoolean(Notification.EXTRA_IS_GROUP_CONVERSATION, false) ||
                 (!parsedGroupTitle.isNullOrBlank() && (parsedGroupTitle.contains(",") || parsedGroupTitle.contains("&")))
 
-        // 4. Resolve participant phone numbers from contacts for group threads
+        // 4. Resolve participant phone numbers from contacts & MessagingStyle persons
         val participantsSet = mutableSetOf<String>()
         val participantNames = mutableListOf<String>()
 
@@ -158,20 +169,39 @@ object RcsConversationManager {
             participantNames.addAll(names)
             for (name in names) {
                 val phone = SmsRepository.resolvePhoneNumberForContactName(context, name)
-                if (phone != null && phone.isNotBlank()) {
+                if (phone != null && SmsRepository.isValidPhoneAddress(phone)) {
                     participantsSet.add(phone)
                 }
             }
+        } else if (!isGroup && cleanTitle.isNotBlank()) {
+            val singlePhone = SmsRepository.normalizePhoneNumber(cleanTitle).takeIf { SmsRepository.isValidPhoneAddress(it) }
+                ?: SmsRepository.resolvePhoneNumberForContactName(context, parsedSenderFromTitle ?: cleanTitle)
+            if (singlePhone != null && SmsRepository.isValidPhoneAddress(singlePhone)) {
+                participantsSet.add(singlePhone)
+            }
         }
 
-        // Try to look up existing Telephony thread ID for these participants
+        // Also harvest valid phone numbers from MessagingStyle persons before thread resolution
+        messagingStyle?.messages?.forEach { m ->
+            val person = m.person ?: return@forEach
+            val resolvedFromUri = SmsRepository.resolvePhoneNumberFromUri(context, person.uri)
+            val resolvedFromName = person.name?.toString()?.takeIf { it.isNotBlank() }?.let {
+                SmsRepository.resolvePhoneNumberForContactName(context, it)
+            }
+            val candidate = resolvedFromUri ?: resolvedFromName
+            if (candidate != null && SmsRepository.isValidPhoneAddress(candidate)) {
+                participantsSet.add(candidate)
+            }
+        }
+
+        // Try to look up existing Telephony thread ID for these participants (both group & 1-on-1)
         var resolvedTelephonyThreadId: Long? = null
-        if (participantsSet.size > 1) {
+        if (participantsSet.isNotEmpty() && com.example.pushbridge.util.PermissionUtils.hasSmsReadPermission(context)) {
             try {
                 val tid = Telephony.Threads.getOrCreateThreadId(context, participantsSet)
                 if (tid > 0) {
                     resolvedTelephonyThreadId = tid
-                    Log.i(TAG, "Resolved RCS group '$parsedGroupTitle' to existing Telephony thread ID $tid via participants: $participantsSet")
+                    Log.i(TAG, "Resolved RCS conversation '${parsedGroupTitle ?: cleanTitle}' to Telephony thread ID $tid via participants: $participantsSet")
                 }
             } catch (e: Exception) {
                 Log.d(TAG, "Could not get Telephony thread ID for participants: ${e.message}")
@@ -215,13 +245,15 @@ object RcsConversationManager {
                 val msgTime = if (m.timestamp > 0) m.timestamp else sbn.postTime
                 val person = m.person
                 val senderName = person?.name?.toString() ?: parsedSenderFromTitle ?: cleanTitle.ifBlank { "Participant" }
-                val senderUri = person?.uri?.toString() ?: ""
-                var cleanAddress = SmsRepository.normalizePhoneNumber(senderUri.removePrefix("tel:"))
+                val senderUri = person?.uri ?: ""
+                var cleanAddress = SmsRepository.resolvePhoneNumberFromUri(context, senderUri) ?: ""
 
                 if (cleanAddress.isBlank()) {
                     cleanAddress = SmsRepository.resolvePhoneNumberForContactName(context, senderName) ?: ""
                 }
-                if (cleanAddress.isNotBlank()) participantsSet.add(cleanAddress)
+                if (cleanAddress.isNotBlank() && SmsRepository.isValidPhoneAddress(cleanAddress)) {
+                    participantsSet.add(cleanAddress)
+                }
 
                 var attachmentData: String? = null
                 var attachmentMime: String? = m.dataMimeType
@@ -402,8 +434,10 @@ object RcsConversationManager {
                         (!rcs.groupTitle.isNullOrBlank() && (
                                 rcs.groupTitle.equals(tThread.groupTitle, ignoreCase = true) ||
                                 tThread.contactName?.equals(rcs.groupTitle, ignoreCase = true) == true ||
-                                rcs.groupTitle?.contains(tThread.groupTitle ?: "___", ignoreCase = true) == true ||
-                                tThread.groupTitle?.contains(rcs.groupTitle ?: "___", ignoreCase = true) == true
+                                tThread.groupTitle?.let { gt ->
+                                    rcs.groupTitle.contains(gt, ignoreCase = true) ||
+                                    gt.contains(rcs.groupTitle, ignoreCase = true)
+                                } == true
                         )) ||
                         (!rcs.contactName.isNullOrBlank() && (
                                 rcs.contactName.equals(tThread.groupTitle, ignoreCase = true) ||

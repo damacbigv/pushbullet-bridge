@@ -158,3 +158,18 @@ data class DeviceContactItem(
         "cleanDigits" to cleanDigits
     )
 }
+
+data class PeerDeviceInfo(
+    val deviceId: String,
+    val deviceName: String,
+    val deviceRole: DeviceRole,
+    val online: Boolean = false,
+    val lastHeartbeat: Long = 0L,
+    val paginationLimit: Int = 30
+)
+
+data class ClipboardItem(
+    val text: String = "",
+    val source: String = "",
+    val timestamp: Long = 0L
+)

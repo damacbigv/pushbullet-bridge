@@ -390,8 +390,13 @@ async function handleIncomingNotification(notif, sourceDeviceId, shouldTriggerAl
 function injectNotificationIntoSmsThreadsInMemory(notif, sourceDeviceId, currentThreads = {}) {
   if (!notif || !notif.text) return currentThreads;
 
-  const rawTitle = (notif.title || '').replace(/🔒/g, '').trim();
-  const rawSubText = (notif.subText || '').replace(/🔒/g, '').trim();
+  const cleanNotifTitle = (str) => String(str || '')
+    .replace(/🔒/g, '')
+    .replace(/\s*\(\d+\s+messages?\)\s*$/i, '')
+    .trim();
+
+  const rawTitle = cleanNotifTitle(notif.title);
+  const rawSubText = cleanNotifTitle(notif.subText);
   let groupTitle = null;
   let senderName = rawTitle;
   let isGroup = false;
@@ -399,7 +404,7 @@ function injectNotificationIntoSmsThreadsInMemory(notif, sourceDeviceId, current
   // Google Messages group chat title format: "<Group or Members>: <Sender Name>"
   // e.g. "Dad Valla Olliver II, Mom Bertha Olliver: Mom Bertha Olliver"
   if (rawTitle.includes(':')) {
-    groupTitle = rawTitle.substring(0, rawTitle.lastIndexOf(':')).trim();
+    groupTitle = cleanNotifTitle(rawTitle.substring(0, rawTitle.lastIndexOf(':')));
     senderName = rawTitle.substring(rawTitle.lastIndexOf(':') + 1).trim();
     isGroup = true;
   } else if (rawTitle.includes(',') || rawTitle.includes('&')) {
@@ -410,28 +415,42 @@ function injectNotificationIntoSmsThreadsInMemory(notif, sourceDeviceId, current
     isGroup = true;
   }
 
-  // Match existing thread in currentThreads
+  // Match existing thread in currentThreads (preventing duplicate 8B+ threads)
+  const cleanDigits = (str) => String(str || '').replace(/\D/g, '').slice(-10);
+  const senderDigits = cleanDigits(senderName);
+  const titleDigits = cleanDigits(rawTitle);
+  const normalizedGroupLower = groupTitle ? groupTitle.toLowerCase().trim() : '';
+
   let matchedKey = null;
   for (const [key, t] of Object.entries(currentThreads)) {
     if (!t) continue;
-    if (groupTitle && t.groupTitle && (
-      t.groupTitle.toLowerCase().trim() === groupTitle.toLowerCase().trim() ||
-      t.groupTitle.toLowerCase().includes(groupTitle.toLowerCase().trim()) ||
-      groupTitle.toLowerCase().includes(t.groupTitle.toLowerCase().trim())
+    const tGroupLower = cleanNotifTitle(t.groupTitle).toLowerCase();
+    const tContactLower = cleanNotifTitle(t.contactName).toLowerCase();
+
+    if (normalizedGroupLower && tGroupLower && (
+      tGroupLower === normalizedGroupLower ||
+      tGroupLower.includes(normalizedGroupLower) ||
+      normalizedGroupLower.includes(tGroupLower)
     )) {
       matchedKey = key;
       break;
     }
-    if (groupTitle && t.contactName && t.contactName.toLowerCase().trim() === groupTitle.toLowerCase().trim()) {
+    if (normalizedGroupLower && tContactLower && tContactLower === normalizedGroupLower) {
       matchedKey = key;
       break;
     }
-    if (!isGroup && senderName && (
-      (t.contactName && t.contactName.toLowerCase().trim() === senderName.toLowerCase().trim()) ||
-      (t.address && t.address.includes(senderName))
-    )) {
-      matchedKey = key;
-      break;
+    if (!isGroup && !t.isGroup) {
+      const addrDigits = cleanDigits(t.address);
+      const matchByDigits = (senderDigits.length >= 4 && addrDigits === senderDigits) ||
+        (titleDigits.length >= 4 && addrDigits === titleDigits);
+      const matchByName = senderName && (
+        (tContactLower && tContactLower === senderName.toLowerCase().trim()) ||
+        (t.address && t.address.trim() === senderName.trim())
+      );
+      if (matchByDigits || matchByName) {
+        matchedKey = key;
+        break;
+      }
     }
   }
 
@@ -1073,9 +1092,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const effectiveIsEncrypted = !!(isEncrypted || existingThread.isEncrypted);
           const effectiveProtocol = protocol || existingThread.protocol || (effectiveIsEncrypted ? 'E2EE_RCS' : (effectiveIsRcs ? 'RCS' : 'SMS'));
 
+          const numericThreadId = Number.isFinite(Number(threadId)) ? Number(threadId) : 0;
+
           const commandPayload = {
             type: 'SEND_SMS',
-            threadId: threadId || 0,
+            threadId: numericThreadId,
             recipient,
             isGroup: !!isGroup,
             recipients: recipients || [],

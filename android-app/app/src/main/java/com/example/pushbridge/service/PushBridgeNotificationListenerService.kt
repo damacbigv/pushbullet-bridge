@@ -13,10 +13,12 @@ import com.example.pushbridge.data.PushBridgeFirebaseManager
 import com.example.pushbridge.data.PushBridgeSyncManager
 import com.example.pushbridge.model.NotificationPayload
 import com.example.pushbridge.util.NotificationReplyRegistry
+import java.util.concurrent.ConcurrentHashMap
 
 class PushBridgeNotificationListenerService : NotificationListenerService() {
 
     private var telephonyObserver: ContentObserver? = null
+    private val recentFingerprints = ConcurrentHashMap<String, Long>()
 
     companion object {
         private const val TAG = "PushBridgeNotifListener"
@@ -78,7 +80,9 @@ class PushBridgeNotificationListenerService : NotificationListenerService() {
         isConnected = true
         Log.i(TAG, "PushBridge Notification Listener connected and active.")
         PushBridgeFirebaseManager.registerDeviceState(applicationContext)
-        registerTelephonyObserver()
+        if (PushBridgeFirebaseManager.getDeviceRole(applicationContext) == com.example.pushbridge.model.DeviceRole.PRIMARY_PHONE) {
+            registerTelephonyObserver()
+        }
     }
 
     private fun registerTelephonyObserver() {
@@ -134,8 +138,16 @@ class PushBridgeNotificationListenerService : NotificationListenerService() {
         // Never intercept notifications originating from PushBridge itself to avoid feedback loops
         if (pkgName == packageName) return
 
+        // Skip mirroring when disabled (e.g. Wi-Fi Tablet Companion acts as a viewer by default)
+        if (!PushBridgeFirebaseManager.shouldMirrorLocalNotifications(applicationContext)) return
+
         val notification = sbn.notification ?: return
         val extras = notification.extras ?: return
+
+        // Filter out Android group summaries, transport media controls, and Google Cast RCN spam
+        if ((notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0) return
+        if (notification.category == Notification.CATEGORY_TRANSPORT) return
+        if (sbn.key.contains("CastRCN", ignoreCase = true) || sbn.tag.equals("CastRCN", ignoreCase = true)) return
 
         // Filter out persistent background services and media controllers unless they are actual messages
         val isOngoing = (notification.flags and Notification.FLAG_ONGOING_EVENT) != 0
@@ -159,6 +171,18 @@ class PushBridgeNotificationListenerService : NotificationListenerService() {
         if ((isOngoing || isForegroundService) && !isMessagingApp) {
             // Skip ongoing non-messaging alerts like download progress or media players
             return
+        }
+
+        // Deduplicate burst updates of identical non-messaging alerts within 15 seconds
+        val now = System.currentTimeMillis()
+        val fingerprint = "$pkgName|$title|$text"
+        val prevTime = recentFingerprints[fingerprint]
+        if (!isMessagingApp && prevTime != null && (now - prevTime) < 15_000L) {
+            return
+        }
+        recentFingerprints[fingerprint] = now
+        if (recentFingerprints.size > 100) {
+            recentFingerprints.entries.removeIf { now - it.value > 60_000L }
         }
 
         // Get friendly application label

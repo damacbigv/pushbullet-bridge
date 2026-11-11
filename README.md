@@ -1,19 +1,35 @@
-# PushBridge v3.1.4
+# PushBridge v3.2.0
 
-> **Self-Hosted Cross-Platform Notification Mirroring, Scalable Threaded SMS, RCS & E2EE Group Chat Bridge & Multi-Device Companion**  
+> **Self-Hosted Cross-Platform Notification Mirroring, Scalable Threaded SMS, RCS & E2EE Group Chat Bridge & Multi-Device Tablet Dashboard**  
 > A private, modular alternative to Pushbullet connecting Google Chrome, Android phones, Wi-Fi tablets (e.g. Samsung Galaxy Tab S7), and cloud sync relays using Firebase as the real-time synchronization backend.
 
-[![Download Android APK](https://img.shields.io/badge/Download_APK-v3.1.4_(13_MB)-10B981?style=for-the-badge&logo=android&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/download/v3.1.4/PushBridge-v3.1.4.apk)
-[![GitHub Release](https://img.shields.io/badge/GitHub_Release-v3.1.4-6366F1?style=for-the-badge&logo=github&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v3.1.4)
-[![Chrome Extension](https://img.shields.io/badge/Chrome_Extension-Manifest_V3_(v3.1.4)-0EA5E9?style=for-the-badge&logo=googlechrome&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/tree/main/extension)
+[![Download Android APK](https://img.shields.io/badge/Download_APK-v3.2.0_(13_MB)-10B981?style=for-the-badge&logo=android&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/download/v3.2.0/PushBridge-v3.2.0.apk)
+[![GitHub Release](https://img.shields.io/badge/GitHub_Release-v3.2.0-6366F1?style=for-the-badge&logo=github&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v3.2.0)
+[![Chrome Extension](https://img.shields.io/badge/Chrome_Extension-Manifest_V3_(v3.2.0)-0EA5E9?style=for-the-badge&logo=googlechrome&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/tree/main/extension)
 
-📥 **Official GitHub Release Page**: [GitHub Release v3.1.4](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v3.1.4)  
-📦 **Direct APK Download**: [PushBridge-v3.1.4.apk](https://github.com/damacbigv/pushbullet-bridge/releases/download/v3.1.4/PushBridge-v3.1.4.apk)  
-📝 **Detailed Release Notes**: [`releases/release_notes_v3.1.4.md`](file:///Users/volliver/.gemini/antigravity/scratch/pushbullet-bridge/releases/release_notes_v3.1.4.md)
+📥 **Official GitHub Release Page**: [GitHub Release v3.2.0](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v3.2.0)  
+📦 **Direct APK Download**: [PushBridge-v3.2.0.apk](https://github.com/damacbigv/pushbullet-bridge/releases/download/v3.2.0/PushBridge-v3.2.0.apk)  
+📝 **Detailed Release Notes**: [`releases/release_notes_v3.2.0.md`](file:///Users/volliver/.gemini/antigravity/scratch/pushbullet-bridge/releases/release_notes_v3.2.0.md)
 
 ---
 
-## What's New in Version 3.1.4
+## What's New in Version 3.2.0
+
+### 1. Interactive Android & Galaxy Tablet Companion Dashboard
+- **Full Tablet Messaging Workspace**: Launches directly into a 4-tab dashboard (`Messages`, `Notifications`, `Clipboard`, `Settings`) with a responsive left `NavigationRail` on tablets ($\ge 600\,\text{dp}$) and bottom navigation on compact phones.
+- **Split-Pane SMS/MMS/RCS Chat**: Master-detail conversation list + chat timeline with optimistic message sending routed through the paired Primary Phone, `+ New Message` with synced contact autocomplete, search & highlight, `30/50/100` pagination, context-aware timestamps, group participant chips, and fullscreen tap-to-expand MMS/RCS photo lightbox.
+- **Live Notifications & Universal Clipboard**: View mirrored alerts bundled by app or chronologically with inline `RemoteInput` Quick Reply and cross-device dismiss; copy/push clipboard snippets across devices.
+- **Interactive 10-Theme Compose Engine**: Live switching across all 10 high-contrast themes matching the Chrome Extension (*Midnight Dark, Solarized Clean, Emerald Forest, Sunset Neon, Minimalist, Cyberpunk Neon, Electric Indigo, Emerald Sunset, Crimson Velvet, Modern Slate*).
+
+### 2. Sync Reliability, Lookup-URI & Noise Hardening
+- **Lookup-URI Sanitation**: Resolves `content://com.android.contacts/...` `Person.uri` handles via `ContactsContract` and rejects >15-digit malformed numbers (`+333037058...`), preventing failed `SEND_SMS` dispatches and enabling clean RCS-to-Telephony thread merges.
+- **Group Summary Deduplication**: Filters `Notification.FLAG_GROUP_SUMMARY` and strips trailing `(\d+ messages)` suffixes on both Android and Chrome (`extension/background.js`) so active group threads no longer fragment.
+- **Tablet Notification Noise Control**: Defaults **Mirror This Device's Notifications** to **OFF** on Wi-Fi tablets (configurable in Settings) and drops `CastRCN`, `CATEGORY_TRANSPORT`, and 15-second duplicate bursts.
+- **Bandwidth-Safe Multi-Device Sync**: Uses shallow `/devices.json?shallow=true` discovery and binds heavy collection listeners solely to the active selected target device.
+
+---
+
+## Previous Highlight: Version 3.1.4 & Core Capabilities
 
 ### 1. Fixed RCS & Google Messages Group Conversation Discovery
 - **Unlocked Notification Interception**: Removed the restrictive `MessagingStyle` check in `RcsConversationManager.kt`. Google Messages notifications (e.g. `"Dad Valla Olliver II, Mom Bertha Olliver: Mom Bertha Olliver"`) are now instantly recognized as active conversation threads and mapped to thread IDs $\ge 8{,}000{,}000{,}000$.
@@ -121,7 +137,7 @@ pushbullet-bridge/
 │   └── README.md
 │
 ├── releases/           # Pre-compiled binaries & distribution packages
-│   └── PushBridge-v3.1.2.apk
+│   └── PushBridge-v3.2.0.apk
 │
 ├── package.json        # Workspace orchestrator scripts
 └── README.md
@@ -147,7 +163,7 @@ pushbullet-bridge/
 
 ### 2. Android Companion App (Phone or Wi-Fi Tablet)
 
-1. Download **`PushBridge-v3.1.2.apk`** from [Releases](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v3.1.2) or copy from `releases/PushBridge-v3.1.2.apk`.
+1. Download **`PushBridge-v3.2.0.apk`** from [Releases](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v3.2.0) or copy from `releases/PushBridge-v3.2.0.apk` (install on both your phone and Wi-Fi tablet).
 2. On your Android phone or Samsung Galaxy Tab S7:
    - Allow installation from unknown sources if prompted.
    - Launch **PushBridge**.

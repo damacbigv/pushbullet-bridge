@@ -11,12 +11,13 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import com.example.pushbridge.data.PushBridgeFirebaseManager
 import com.example.pushbridge.theme.PushBridgeTheme
-import com.example.pushbridge.util.PermissionUtils
 
 class MainActivity : ComponentActivity() {
 
@@ -32,9 +33,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        PushBridgeFirebaseManager.initialize(applicationContext)
 
         setContent {
-            PushBridgeTheme {
+            val activeThemeId by PushBridgeFirebaseManager.selectedTheme.collectAsState()
+            PushBridgeTheme(themeId = activeThemeId) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
@@ -52,6 +55,7 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         permissionRefreshTrigger.value++
         PushBridgeFirebaseManager.registerDeviceState(this)
+        PushBridgeFirebaseManager.touchHeartbeat(this)
     }
 
     private fun requestSmsAndNotificationPermissions() {
