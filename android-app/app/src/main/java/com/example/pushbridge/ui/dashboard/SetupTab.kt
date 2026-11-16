@@ -759,7 +759,7 @@ private fun DiagnosticsCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text("DIAGNOSTICS & TEST", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = c.accent)
-                Text("PushBridge v3.2.0", fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = c.textSubtle)
+                Text("PushBridge v3.3.0", fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = c.textSubtle)
             }
 
             Button(

@@ -1,15 +1,31 @@
-# PushBridge v3.2.0
+# PushBridge v3.3.0
 
 > **Self-Hosted Cross-Platform Notification Mirroring, Scalable Threaded SMS, RCS & E2EE Group Chat Bridge & Multi-Device Tablet Dashboard**  
 > A private, modular alternative to Pushbullet connecting Google Chrome, Android phones, Wi-Fi tablets (e.g. Samsung Galaxy Tab S7), and cloud sync relays using Firebase as the real-time synchronization backend.
 
-[![Download Android APK](https://img.shields.io/badge/Download_APK-v3.2.0_(13_MB)-10B981?style=for-the-badge&logo=android&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/download/v3.2.0/PushBridge-v3.2.0.apk)
-[![GitHub Release](https://img.shields.io/badge/GitHub_Release-v3.2.0-6366F1?style=for-the-badge&logo=github&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v3.2.0)
-[![Chrome Extension](https://img.shields.io/badge/Chrome_Extension-Manifest_V3_(v3.2.0)-0EA5E9?style=for-the-badge&logo=googlechrome&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/tree/main/extension)
+[![Download Android APK](https://img.shields.io/badge/Download_APK-v3.3.0_(13_MB)-10B981?style=for-the-badge&logo=android&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/download/v3.3.0/PushBridge-v3.3.0.apk)
+[![GitHub Release](https://img.shields.io/badge/GitHub_Release-v3.3.0-6366F1?style=for-the-badge&logo=github&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v3.3.0)
+[![Chrome Extension](https://img.shields.io/badge/Chrome_Extension-Manifest_V3_(v3.3.0)-0EA5E9?style=for-the-badge&logo=googlechrome&logoColor=white)](https://github.com/damacbigv/pushbullet-bridge/tree/main/extension)
 
-📥 **Official GitHub Release Page**: [GitHub Release v3.2.0](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v3.2.0)  
-📦 **Direct APK Download**: [PushBridge-v3.2.0.apk](https://github.com/damacbigv/pushbullet-bridge/releases/download/v3.2.0/PushBridge-v3.2.0.apk)  
-📝 **Detailed Release Notes**: [`releases/release_notes_v3.2.0.md`](file:///Users/volliver/.gemini/antigravity/scratch/pushbullet-bridge/releases/release_notes_v3.2.0.md)
+📥 **Official GitHub Release Page**: [GitHub Release v3.3.0](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v3.3.0)  
+📦 **Direct APK Download**: [PushBridge-v3.3.0.apk](https://github.com/damacbigv/pushbullet-bridge/releases/download/v3.3.0/PushBridge-v3.3.0.apk)  
+📝 **Detailed Release Notes**: [`releases/release_notes_v3.3.0.md`](file:///Users/volliver/.gemini/antigravity/scratch/pushbullet-bridge/releases/release_notes_v3.3.0.md)
+
+---
+
+## What's New in Version 3.3.0
+
+### 1. Unified Thread & Message Deduplication Engine (SMS + RCS Overlap)
+- **Canonical Thread Key Generation**: Eliminates conversation thread duplication by deterministically grouping parallel threads by canonical participant sets and custom group names (`p2p:<digits>`, `named_group:<title>`, `group:<sorted_digits>`).
+- **Self-Identifier & MMS Header Filtering**: Strips out user self-identifiers (such as `volliver@gmail.com` and cellular line numbers) so 1-on-1 conversations are never erroneously flagged as 2-person group threads.
+- **Carrier Routing Token Elimination**: Strips synthetic carrier MMS gateway prefixes and shortcode routing tokens (e.g. `+444332222235`) from group participant sets.
+- **Named Group Participant Overlap Mapping**: Maps family group threads sharing established member subsets (e.g. Mom, Dad, Wife) directly into the genuine group thread (`Parent's and Wife`).
+- **Contact Name Fallback**: Resolves corrupted contact lookup URI addresses directly to known 1-on-1 contact phone numbers.
+- **Compound Message Fingerprinting**: Deduplicates individual message bubbles using a compound key of `(normalized_sender, timestamp_window_±5s, message_body_hash)`. Merges identical messages arriving across different transport layers (SMS vs. RCS) into a single bubble, preserving richer protocol badges (`isRcs`, `isEncrypted`, `protocol`), decoded photo attachments, and delivery status.
+
+### 2. UI Cleanup & Thread Consolidation
+- **Chrome Extension (`popup.js`, `background.js`)**: Automatically groups and consolidates parallel thread stubs before rendering pagination limits or search filters. Eliminates duplicate message bubbles and prevents incoming notifications from creating redundant `8000000000+` thread stubs.
+- **Android Tablet Dashboard (`MessagesTab.kt`, `ConversationDeduplicator.kt`)**: Renders deduplicated threads in the tablet split-pane (`36% / 64%`), ensuring smooth selection and navigation. Atomically updates Firebase RTDB using `setValue` so stale duplicate keys are pruned.
 
 ---
 
@@ -137,7 +153,7 @@ pushbullet-bridge/
 │   └── README.md
 │
 ├── releases/           # Pre-compiled binaries & distribution packages
-│   └── PushBridge-v3.2.0.apk
+│   └── PushBridge-v3.3.0.apk
 │
 ├── package.json        # Workspace orchestrator scripts
 └── README.md
@@ -163,7 +179,7 @@ pushbullet-bridge/
 
 ### 2. Android Companion App (Phone or Wi-Fi Tablet)
 
-1. Download **`PushBridge-v3.2.0.apk`** from [Releases](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v3.2.0) or copy from `releases/PushBridge-v3.2.0.apk` (install on both your phone and Wi-Fi tablet).
+1. Download **`PushBridge-v3.3.0.apk`** from [Releases](https://github.com/damacbigv/pushbullet-bridge/releases/tag/v3.3.0) or copy from `releases/PushBridge-v3.3.0.apk` (install on both your phone and Wi-Fi tablet).
 2. On your Android phone or Samsung Galaxy Tab S7:
    - Allow installation from unknown sources if prompted.
    - Launch **PushBridge**.

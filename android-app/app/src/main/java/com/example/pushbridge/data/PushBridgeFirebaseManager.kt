@@ -416,9 +416,10 @@ object PushBridgeFirebaseManager {
                     parseThreadSnapshot(child)?.let { parsed.add(it) }
                 }
                 val mergedWithOptimistic = mergeOptimisticMessages(parsed)
-                _syncedThreads.value = mergedWithOptimistic.sortedByDescending { it.lastTimestamp }
+                val deduped = ConversationDeduplicator.deduplicateAndMergeThreads(mergedWithOptimistic)
+                _syncedThreads.value = deduped.sortedByDescending { it.lastTimestamp }
                 _isSyncingFromPeer.value = false
-                Log.d(TAG, "Dashboard updated ${mergedWithOptimistic.size} synced threads from $targetDeviceId")
+                Log.d(TAG, "Dashboard updated ${deduped.size} deduplicated synced threads from $targetDeviceId")
             }
 
             override fun onCancelled(error: DatabaseError) {
@@ -649,7 +650,7 @@ object PushBridgeFirebaseManager {
      * Converts a thread's `messages` Map into a typed chronologically-sorted list of [SmsMessageItem].
      */
     fun extractSortedMessages(thread: SmsConversationThread): List<SmsMessageItem> {
-        return thread.messages.entries.mapNotNull { (key, value) ->
+        val rawMessages = thread.messages.entries.mapNotNull { (key, value) ->
             val map = value as? Map<*, *> ?: return@mapNotNull null
             val ts = readLong(map["timestamp"]) ?: 0L
             val isRcs = (map["isRcs"] as? Boolean) ?: thread.isRcs
@@ -673,7 +674,8 @@ object PushBridgeFirebaseManager {
                 protocol = protocol,
                 status = map["status"]?.toString()?.takeIf { it.isNotBlank() }
             )
-        }.sortedBy { it.timestamp }
+        }
+        return ConversationDeduplicator.deduplicateMessages(rawMessages)
     }
 
     private fun readLong(value: Any?): Long? {
@@ -920,35 +922,28 @@ object PushBridgeFirebaseManager {
                     return@launch
                 }
 
+                val rawCombined = (threads + rcsThreadsCache.values).toList()
+                val dedupedThreads = ConversationDeduplicator.deduplicateAndMergeThreads(rawCombined)
+                Log.i(TAG, "Deduplicated ${rawCombined.size} raw threads into ${dedupedThreads.size} unified conversations for sync.")
+
                 val threadsMap = mutableMapOf<String, Any?>()
-                for (thread in threads) {
+                for (thread in dedupedThreads) {
                     threadsMap[thread.threadId.toString()] = thread.toMap()
                 }
 
-                // Preserve all active RCS threads (e.g. family group chats) so they are never wiped out
-                for ((rcsKey, rcsThread) in rcsThreadsCache) {
-                    threadsMap[rcsKey] = rcsThread.toMap()
-                }
-
-                threadsRef.updateChildren(threadsMap)
+                threadsRef.setValue(threadsMap)
                     .addOnSuccessListener {
-                        Log.i(TAG, "Successfully synced ${threads.size} SMS threads (limit $limit) + ${rcsThreadsCache.size} RCS threads to Firebase.")
+                        Log.i(TAG, "Successfully synced ${dedupedThreads.size} deduplicated threads (limit $limit) to Firebase.")
                         touchHeartbeat(context)
-                        scope.launch(Dispatchers.Main) { onComplete?.invoke(threads.size + rcsThreadsCache.size) }
+                        scope.launch(Dispatchers.Main) { onComplete?.invoke(dedupedThreads.size) }
                     }
                     .addOnFailureListener { err ->
                         Log.e(TAG, "Failed bulk updating SMS threads to Firebase: ${err.message}. Writing individually...", err)
                         scope.launch(Dispatchers.IO) {
                             var individualCount = 0
-                            for (thread in threads) {
+                            for (thread in dedupedThreads) {
                                 try {
                                     threadsRef.child(thread.threadId.toString()).setValue(thread.toMap())
-                                    individualCount++
-                                } catch (_: Exception) {}
-                            }
-                            for ((rcsKey, rcsThread) in rcsThreadsCache) {
-                                try {
-                                    threadsRef.child(rcsKey).setValue(rcsThread.toMap())
                                     individualCount++
                                 } catch (_: Exception) {}
                             }
@@ -1450,7 +1445,8 @@ object PushBridgeFirebaseManager {
                 status = "sending"
             )
             optimisticMessagesByThread.getOrPut(resolvedThreadId) { mutableListOf() }.add(optimisticMsg)
-            _syncedThreads.value = mergeOptimisticMessages(_syncedThreads.value).sortedByDescending { it.lastTimestamp }
+            val mergedWithOptimistic = mergeOptimisticMessages(_syncedThreads.value)
+            _syncedThreads.value = ConversationDeduplicator.deduplicateAndMergeThreads(mergedWithOptimistic).sortedByDescending { it.lastTimestamp }
         }
 
         // If user is directly on their Primary Phone targeting itself, execute immediately

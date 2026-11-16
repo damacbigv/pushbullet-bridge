@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.example.pushbridge.data.ConversationDeduplicator
 import com.example.pushbridge.data.PushBridgeFirebaseManager
 import com.example.pushbridge.model.DeviceContactItem
 import com.example.pushbridge.model.SmsConversationThread
@@ -79,17 +80,22 @@ fun MessagesTab(
     var sendFeedback by remember { mutableStateOf<String?>(null) }
     var lightboxImageData by remember { mutableStateOf<Pair<ImageBitmap, String>?>(null) }
 
+    // Normalize and deduplicate fragmented threads across SMS, MMS, and RCS
+    val dedupedThreads = remember(threads) {
+        ConversationDeduplicator.deduplicateAndMergeThreads(threads)
+    }
+
     // Filter threads across display names, addresses, recipients, snippets, and loaded message bodies
-    val filteredThreads = remember(threads, searchQuery, contacts) {
+    val filteredThreads = remember(dedupedThreads, searchQuery, contacts) {
         val q = searchQuery.trim()
         if (q.isEmpty()) {
-            threads
+            dedupedThreads
         } else {
             val qLower = q.lowercase()
             val terms = qLower.split(Regex("\\s+")).filter { it.isNotBlank() }
             val queryDigits = q.replace(Regex("\\D"), "")
 
-            threads.filter { thread ->
+            dedupedThreads.filter { thread ->
                 val title = threadDisplayName(thread, contacts)
                 val recipText = thread.recipients.joinToString(" ") { r ->
                     listOfNotNull(r["name"], r["phone"]).joinToString(" ")
@@ -117,8 +123,8 @@ fun MessagesTab(
         }
     }
 
-    val activeThread = remember(threads, selectedThreadId) {
-        threads.firstOrNull { it.threadId == selectedThreadId }
+    val activeThread = remember(dedupedThreads, selectedThreadId) {
+        dedupedThreads.firstOrNull { it.threadId == selectedThreadId }
     }
 
     // Handle Android hardware/gesture Back when viewing a chat on compact phones
@@ -160,7 +166,7 @@ fun MessagesTab(
         ) {
             ThreadListPane(
                 threads = filteredThreads,
-                allCount = threads.size,
+                allCount = dedupedThreads.size,
                 contacts = contacts,
                 selectedThreadId = if (isComposingNewChat) null else selectedThreadId,
                 searchQuery = searchQuery,
@@ -218,7 +224,7 @@ fun MessagesTab(
             if (selectedThreadId == null && !isComposingNewChat) {
                 ThreadListPane(
                     threads = filteredThreads,
-                    allCount = threads.size,
+                    allCount = dedupedThreads.size,
                     contacts = contacts,
                     selectedThreadId = null,
                     searchQuery = searchQuery,

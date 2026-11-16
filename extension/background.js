@@ -4,6 +4,17 @@
  * monitors incoming notifications/SMS/clipboard, and dispatches native desktop toasts.
  */
 import { firebaseConfig } from './firebase-config.js';
+import {
+  normalizeDigits,
+  isSelfOrCarrierToken,
+  cleanConversationTitle,
+  extractNonSelfParticipants,
+  buildNamedGroupMap,
+  buildContactNameToPhoneMap,
+  getCanonicalThreadKey,
+  deduplicateMessages,
+  deduplicateAndMergeThreads
+} from './deduplication.js';
 
 const ALARM_STREAM_HEARTBEAT = 'pushbridge_stream_heartbeat';
 const RTDB_BASE_URL = firebaseConfig.databaseURL || 'https://pushclonebridge-default-rtdb.firebaseio.com';
@@ -301,11 +312,12 @@ async function handleInitialNotificationsBatch(notificationsObj, devId) {
   // Cap history to 50 items and seen IDs to 200
   const finalHistory = updatedHistory.slice(0, 50);
   const finalSeen = Array.from(seenSet).slice(0, 200);
+  const dedupedThreads = deduplicateAndMergeThreads(inMemoryThreads);
 
   await chrome.storage.local.set({
     seenNotificationIds: finalSeen,
     notificationHistory: finalHistory,
-    smsThreads: inMemoryThreads,
+    smsThreads: dedupedThreads,
     activeTargetDeviceId: devId
   });
 
@@ -319,7 +331,7 @@ async function handleInitialNotificationsBatch(notificationsObj, devId) {
   if (threadsChanged) {
     chrome.runtime.sendMessage({
       type: 'SMS_THREADS_UPDATED',
-      threads: inMemoryThreads
+      threads: dedupedThreads
     }).catch(() => {});
   }
 }
@@ -390,13 +402,8 @@ async function handleIncomingNotification(notif, sourceDeviceId, shouldTriggerAl
 function injectNotificationIntoSmsThreadsInMemory(notif, sourceDeviceId, currentThreads = {}) {
   if (!notif || !notif.text) return currentThreads;
 
-  const cleanNotifTitle = (str) => String(str || '')
-    .replace(/🔒/g, '')
-    .replace(/\s*\(\d+\s+messages?\)\s*$/i, '')
-    .trim();
-
-  const rawTitle = cleanNotifTitle(notif.title);
-  const rawSubText = cleanNotifTitle(notif.subText);
+  const rawTitle = cleanConversationTitle(notif.title);
+  const rawSubText = cleanConversationTitle(notif.subText);
   let groupTitle = null;
   let senderName = rawTitle;
   let isGroup = false;
@@ -404,7 +411,7 @@ function injectNotificationIntoSmsThreadsInMemory(notif, sourceDeviceId, current
   // Google Messages group chat title format: "<Group or Members>: <Sender Name>"
   // e.g. "Dad Valla Olliver II, Mom Bertha Olliver: Mom Bertha Olliver"
   if (rawTitle.includes(':')) {
-    groupTitle = cleanNotifTitle(rawTitle.substring(0, rawTitle.lastIndexOf(':')));
+    groupTitle = cleanConversationTitle(rawTitle.substring(0, rawTitle.lastIndexOf(':')));
     senderName = rawTitle.substring(rawTitle.lastIndexOf(':') + 1).trim();
     isGroup = true;
   } else if (rawTitle.includes(',') || rawTitle.includes('&')) {
@@ -415,51 +422,40 @@ function injectNotificationIntoSmsThreadsInMemory(notif, sourceDeviceId, current
     isGroup = true;
   }
 
-  // Match existing thread in currentThreads (preventing duplicate 8B+ threads)
-  const cleanDigits = (str) => String(str || '').replace(/\D/g, '').slice(-10);
-  const senderDigits = cleanDigits(senderName);
-  const titleDigits = cleanDigits(rawTitle);
-  const normalizedGroupLower = groupTitle ? groupTitle.toLowerCase().trim() : '';
+  const notifThreadCandidate = {
+    threadId: Date.now(),
+    address: senderName,
+    contactName: groupTitle || senderName,
+    groupTitle: groupTitle,
+    isGroup: isGroup,
+    recipients: groupTitle ? groupTitle.split(/[,&]+/).map(n => ({
+      name: n.trim(),
+      phone: n.trim(),
+      cleanDigits: normalizeDigits(n.trim())
+    })) : [{ name: senderName, phone: senderName, cleanDigits: normalizeDigits(senderName) }]
+  };
 
-  let matchedKey = null;
-  for (const [key, t] of Object.entries(currentThreads)) {
-    if (!t) continue;
-    const tGroupLower = cleanNotifTitle(t.groupTitle).toLowerCase();
-    const tContactLower = cleanNotifTitle(t.contactName).toLowerCase();
+  const threadsList = Object.values(currentThreads).filter(t => t && t.threadId !== undefined);
+  const namedGroupMap = buildNamedGroupMap(threadsList);
+  const contactNameToPhone = buildContactNameToPhoneMap(threadsList);
+  const candidateKey = getCanonicalThreadKey(notifThreadCandidate, namedGroupMap, contactNameToPhone);
 
-    if (normalizedGroupLower && tGroupLower && (
-      tGroupLower === normalizedGroupLower ||
-      tGroupLower.includes(normalizedGroupLower) ||
-      normalizedGroupLower.includes(tGroupLower)
-    )) {
-      matchedKey = key;
+  // Look for existing thread matching candidateKey
+  let matchedThread = null;
+  for (const t of threadsList) {
+    const tKey = getCanonicalThreadKey(t, namedGroupMap, contactNameToPhone);
+    if (tKey === candidateKey) {
+      matchedThread = t;
       break;
-    }
-    if (normalizedGroupLower && tContactLower && tContactLower === normalizedGroupLower) {
-      matchedKey = key;
-      break;
-    }
-    if (!isGroup && !t.isGroup) {
-      const addrDigits = cleanDigits(t.address);
-      const matchByDigits = (senderDigits.length >= 4 && addrDigits === senderDigits) ||
-        (titleDigits.length >= 4 && addrDigits === titleDigits);
-      const matchByName = senderName && (
-        (tContactLower && tContactLower === senderName.toLowerCase().trim()) ||
-        (t.address && t.address.trim() === senderName.trim())
-      );
-      if (matchByDigits || matchByName) {
-        matchedKey = key;
-        break;
-      }
     }
   }
 
   // Generate stable thread ID if new
-  const threadKey = matchedKey || String(
+  const threadKey = matchedThread ? String(matchedThread.threadId) : String(
     8000000000 + Math.abs((groupTitle || senderName || notif.id).split('').reduce((a, b) => (((a << 5) - a) + b.charCodeAt(0)) | 0, 0))
   );
 
-  const existingThread = currentThreads[threadKey] || {
+  const existingThread = matchedThread || {
     threadId: Number(threadKey) || Date.now(),
     address: groupTitle || senderName,
     contactName: groupTitle || senderName,
@@ -468,11 +464,7 @@ function injectNotificationIntoSmsThreadsInMemory(notif, sourceDeviceId, current
     unreadCount: 0,
     isGroup: isGroup,
     groupTitle: groupTitle,
-    recipients: groupTitle ? groupTitle.split(/[,&]+/).map(n => ({
-      name: n.trim(),
-      phone: n.trim(),
-      cleanDigits: n.trim().replace(/\D/g, '')
-    })) : [{ name: senderName, phone: senderName, cleanDigits: senderName.replace(/\D/g, '') }],
+    recipients: notifThreadCandidate.recipients,
     messages: {},
     isRcs: true,
     protocol: 'RCS'
@@ -492,23 +484,27 @@ function injectNotificationIntoSmsThreadsInMemory(notif, sourceDeviceId, current
     protocol: 'RCS'
   };
 
-  const updatedMessages = {
-    ...(existingThread.messages || {}),
-    [msgId]: newMsg
-  };
+  const allMsgs = [...Object.values(existingThread.messages || {}), newMsg];
+  const dedupedMsgs = deduplicateMessages(allMsgs);
+  const messagesMap = {};
+  dedupedMsgs.forEach(m => {
+    messagesMap[String(m.id || m.timestamp)] = m;
+  });
 
   const updatedThread = {
     ...existingThread,
     snippet: notif.text,
     lastTimestamp: notif.timestamp || Date.now(),
     unreadCount: (existingThread.unreadCount || 0) + 1,
-    messages: updatedMessages
+    messages: messagesMap
   };
 
-  return {
+  const mergedMap = {
     ...currentThreads,
     [threadKey]: updatedThread
   };
+
+  return deduplicateAndMergeThreads(mergedMap);
 }
 
 /**
@@ -689,7 +685,7 @@ function normalizeThreadsMap(raw) {
       }
     }
   }
-  return map;
+  return deduplicateAndMergeThreads(map);
 }
 
 /**
@@ -746,14 +742,16 @@ async function handleIncomingSmsThreads(data, path, sourceDeviceId) {
     }
   }
 
+  const deduped = deduplicateAndMergeThreads(updatedThreads);
+
   await chrome.storage.local.set({
-    smsThreads: updatedThreads,
+    smsThreads: deduped,
     activeTargetDeviceId: sourceDeviceId
   });
 
   chrome.runtime.sendMessage({
     type: 'SMS_THREADS_UPDATED',
-    threads: updatedThreads
+    threads: deduped
   }).catch(() => {});
 }
 
@@ -853,12 +851,13 @@ async function autoSyncDeviceData(devId) {
     if (threadsRes.ok) {
       const threadsData = await threadsRes.json();
       if (threadsData && typeof threadsData === 'object') {
-        await chrome.storage.local.set({ smsThreads: threadsData });
+        const deduped = deduplicateAndMergeThreads(threadsData);
+        await chrome.storage.local.set({ smsThreads: deduped });
         chrome.runtime.sendMessage({
           type: 'SMS_THREADS_UPDATED',
-          threads: threadsData
+          threads: deduped
         }).catch(() => {});
-        console.log(`[PushBridge SW] Auto-synced ${Object.keys(threadsData).length} SMS threads from ${devId}.`);
+        console.log(`[PushBridge SW] Auto-synced ${Object.keys(deduped).length} deduplicated SMS threads from ${devId}.`);
       }
     }
 
@@ -1053,7 +1052,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const fetchedThreads = data && typeof data === 'object' ? data : {};
           const { smsThreads: existingLocal = {} } = await chrome.storage.local.get('smsThreads');
           // Merge incoming threads with local threads to preserve actively tracked RCS/group discussions
-          const mergedThreads = { ...existingLocal, ...fetchedThreads };
+          const mergedThreads = deduplicateAndMergeThreads({ ...existingLocal, ...fetchedThreads });
           await chrome.storage.local.set({ smsThreads: mergedThreads });
 
           let slicedThreads = mergedThreads;

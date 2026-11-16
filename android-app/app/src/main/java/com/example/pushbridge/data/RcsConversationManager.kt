@@ -478,7 +478,7 @@ object RcsConversationManager {
             }
         }
 
-        return mergedList.sortedByDescending { it.lastTimestamp }
+        return ConversationDeduplicator.deduplicateAndMergeThreads(mergedList)
     }
 
     /**

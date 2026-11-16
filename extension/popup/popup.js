@@ -12,6 +12,11 @@ import {
   normalizePhoneNumber,
   getInitials
 } from '../contacts/google-contacts.js';
+import {
+  normalizeDigits,
+  deduplicateMessages,
+  deduplicateAndMergeThreads
+} from '../deduplication.js';
 
 // Application State
 let currentViewMode = 'bundled'; // 'bundled' | 'chronological'
@@ -819,7 +824,8 @@ function setupThreadedSms() {
     let recipientsList = [];
 
     const { smsThreads = {} } = await chrome.storage.local.get('smsThreads');
-    const thread = smsThreads[String(activeThreadId)];
+    const dedupedThreads = deduplicateAndMergeThreads(smsThreads);
+    const thread = dedupedThreads[String(activeThreadId)] || smsThreads[String(activeThreadId)];
 
     if (activeThreadId === 'new_chat') {
       targetRecipient = newRecipientInput.value.trim();
@@ -1015,7 +1021,9 @@ async function loadSmsThreads() {
     updatePaginationUI(currentThreadLimit);
   }
 
-  let allThreadsList = Object.values(smsThreads || {}).filter(t => t && typeof t === 'object' && t.threadId !== undefined);
+  const dedupedMap = deduplicateAndMergeThreads(smsThreads || {});
+  let allThreadsList = Object.values(dedupedMap).filter(t => t && typeof t === 'object' && t.threadId !== undefined);
+  allThreadsList.sort((a, b) => (b.lastTimestamp || 0) - (a.lastTimestamp || 0));
 
   if (allThreadsList.length === 0) {
     try {
@@ -1026,7 +1034,9 @@ async function loadSmsThreads() {
       });
       if (res && res.threads) {
         smsThreads = res.threads;
-        allThreadsList = Object.values(smsThreads || {}).filter(t => t && typeof t === 'object' && t.threadId !== undefined);
+        const freshDeduped = deduplicateAndMergeThreads(smsThreads || {});
+        allThreadsList = Object.values(freshDeduped).filter(t => t && typeof t === 'object' && t.threadId !== undefined);
+        allThreadsList.sort((a, b) => (b.lastTimestamp || 0) - (a.lastTimestamp || 0));
       }
     } catch {}
   }
@@ -1297,10 +1307,21 @@ async function renderActiveConversation() {
     ? deviceContactsCache
     : Object.values(deviceContactsCache);
 
-  let threadsList = Object.values(smsThreads || {}).filter(t => t && typeof t === 'object' && t.threadId !== undefined);
+  const dedupedThreadsMap = deduplicateAndMergeThreads(smsThreads || {});
+  let threadsList = Object.values(dedupedThreadsMap).filter(t => t && typeof t === 'object' && t.threadId !== undefined);
   if (threadsList.length === 0) threadsList = getFallbackSmsThreads();
 
-  const thread = threadsList.find(t => String(t.threadId) === String(activeThreadId));
+  let thread = threadsList.find(t => String(t.threadId) === String(activeThreadId));
+  if (!thread && activeThreadId) {
+    const activeDigits = normalizeDigits(String(activeThreadId));
+    thread = threadsList.find(t => {
+      const addrDigits = normalizeDigits(t.address);
+      return activeDigits && addrDigits && (addrDigits === activeDigits || addrDigits.includes(activeDigits));
+    });
+    if (thread) {
+      activeThreadId = thread.threadId;
+    }
+  }
   if (!thread) {
     container.innerHTML = `
       <div class="h-full flex flex-col items-center justify-center text-center p-6 text-slate-500">
@@ -1405,10 +1426,10 @@ async function renderActiveConversation() {
 
   // Extract messages and sort chronologically (oldest to newest)
   const rawMessages = getThreadMessages(thread);
-  rawMessages.sort((a, b) => a.timestamp - b.timestamp);
+  const dedupedMessages = deduplicateMessages(rawMessages);
 
   container.innerHTML = '';
-  if (rawMessages.length === 0) {
+  if (dedupedMessages.length === 0) {
     container.innerHTML = `
       <div class="h-full flex items-center justify-center text-xs text-slate-500">
         No message history recorded in this thread yet.
@@ -1418,7 +1439,7 @@ async function renderActiveConversation() {
   }
 
   let lastDateStr = '';
-  rawMessages.forEach(msg => {
+  dedupedMessages.forEach(msg => {
     const msgDate = new Date(msg.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' });
     if (msgDate !== lastDateStr) {
       const divider = document.createElement('div');
@@ -1752,7 +1773,7 @@ function setupGlobalEvents() {
         // Fast badge counter update without rebuilding threads DOM
         const { smsThreads = {} } = await chrome.storage.local.get('smsThreads');
         const counter = document.getElementById('threads-counter');
-        const validThreads = Object.values(smsThreads || {}).filter(t => t && t.threadId !== undefined);
+        const validThreads = Object.values(deduplicateAndMergeThreads(smsThreads) || {});
         if (counter) counter.textContent = validThreads.length;
       }
     } else if (message.type === 'DEVICE_CONTACTS_UPDATED') {

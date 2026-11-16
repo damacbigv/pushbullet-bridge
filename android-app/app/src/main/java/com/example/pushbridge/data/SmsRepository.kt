@@ -158,7 +158,9 @@ object SmsRepository {
             if (convMeta != null && convMeta.recipients.isNotEmpty()) {
                 convMeta.recipients.forEach { recip ->
                     val clean = normalizePhoneNumber(recip)
-                    if (clean.isNotBlank()) aggregatedParticipants.add(clean)
+                    if (clean.isNotBlank() && !ConversationDeduplicator.isSelfOrCarrierToken(clean)) {
+                        aggregatedParticipants.add(clean)
+                    }
                 }
             }
 
@@ -167,7 +169,9 @@ object SmsRepository {
             if (!mmsAddrs.isNullOrEmpty()) {
                 mmsAddrs.forEach { recip ->
                     val clean = normalizePhoneNumber(recip)
-                    if (clean.isNotBlank()) aggregatedParticipants.add(clean)
+                    if (clean.isNotBlank() && !ConversationDeduplicator.isSelfOrCarrierToken(clean)) {
+                        aggregatedParticipants.add(clean)
+                    }
                 }
             }
 
@@ -175,12 +179,14 @@ object SmsRepository {
             val smsFallback = threadAddressesFallback[threadId]
             if (aggregatedParticipants.isEmpty() && !smsFallback.isNullOrBlank()) {
                 val clean = normalizePhoneNumber(smsFallback)
-                if (clean.isNotBlank()) aggregatedParticipants.add(clean)
+                if (clean.isNotBlank() && !ConversationDeduplicator.isSelfOrCarrierToken(clean)) {
+                    aggregatedParticipants.add(clean)
+                }
             }
 
             if (aggregatedParticipants.isEmpty() && finalMessages.isNotEmpty()) {
                 finalMessages.forEach { msg ->
-                    if (msg.address != "Me" && msg.address != "Unknown") {
+                    if (msg.address != "Me" && msg.address != "Unknown" && !ConversationDeduplicator.isSelfOrCarrierToken(msg.address)) {
                         val clean = normalizePhoneNumber(msg.address)
                         if (clean.isNotBlank()) aggregatedParticipants.add(clean)
                     }
@@ -277,9 +283,15 @@ object SmsRepository {
             )
         }
 
-        // 7. Merge with active and cached RCS / E2EE conversation threads
-        val mergedWithRcs = RcsConversationManager.mergeWithTelephonyThreads(context, resultThreads)
-        val sorted = mergedWithRcs.sortedByDescending { it.lastTimestamp }
+        // 7. Deduplicate and merge fragmented telephony threads (merges multiple thread_ids for the same contact/group)
+        val dedupedTelephony = ConversationDeduplicator.deduplicateAndMergeThreads(resultThreads)
+
+        // 8. Merge with active and cached RCS / E2EE conversation threads
+        val mergedWithRcs = RcsConversationManager.mergeWithTelephonyThreads(context, dedupedTelephony)
+
+        // 9. Final cross-protocol deduplication pass across combined Telephony + RCS threads
+        val finalDeduplicated = ConversationDeduplicator.deduplicateAndMergeThreads(mergedWithRcs)
+        val sorted = finalDeduplicated.sortedByDescending { it.lastTimestamp }
         return if (sorted.size > maxThreads) sorted.take(maxThreads) else sorted
     }
 

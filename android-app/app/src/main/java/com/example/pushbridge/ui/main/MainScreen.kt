@@ -414,7 +414,7 @@ private fun DashboardTopBar(
                         color = c.badgeBg
                     ) {
                         Text(
-                            text = "v3.2.0",
+                            text = "v3.3.0",
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
                             color = c.badgeText,
